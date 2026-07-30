@@ -129,8 +129,12 @@ pub fn process_album_art(image: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         .decode()?
         .into_rgb8();
 
-    // thumbnail
-    let thumb_rgb = imageops::thumbnail(&decoded, 70, 70);
+    // thumbnail (center-cropped to square first so non-square art isn't stretched)
+    let (src_w, src_h) = decoded.dimensions();
+    let side = src_w.min(src_h);
+    let cropped = imageops::crop_imm(&decoded, (src_w - side) / 2, (src_h - side) / 2, side, side)
+        .to_image();
+    let thumb_rgb = imageops::thumbnail(&cropped, 70, 70);
     let thumb_rgba = DynamicImage::ImageRgb8(thumb_rgb).into_rgba8();
 
     let mut thumb_buf: Vec<u8> = Vec::new();

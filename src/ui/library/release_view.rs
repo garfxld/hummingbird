@@ -148,7 +148,7 @@ impl ReleaseView {
                 track_listing,
                 collection_summary,
                 release_info,
-                img_path: SharedString::from(format!("!db://album/{album_id}/full")),
+                img_path: SharedString::from(format!("!db://album/{album_id}/square")),
                 scroll_handle: ScrollHandle::new(),
                 pending_scroll,
                 scroll_follow: SmoothScrollFollow::new(RELEASE_SCROLL_ANIMATION_DURATION),

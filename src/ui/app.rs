@@ -126,7 +126,7 @@ impl Render for MainWindow {
                     .max_h_full()
                     .child(
                         AnyView::from(self.controls.clone())
-                            .cached(StyleRefinement::default().w_full().flex().h(px(68.0))),
+                            .cached(StyleRefinement::default().w_full().flex().h(px(70.0))),
                     )
                     .child(
                         div()

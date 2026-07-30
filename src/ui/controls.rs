@@ -9,8 +9,8 @@ use crate::{
         components::{
             context::context,
             icons::{
-                MENU, MICROPHONE, NEXT_TRACK, PAUSE, PLAY, PREV_TRACK, REPEAT, REPEAT_OFF,
-                REPEAT_ONCE, SHUFFLE, STAR, STAR_FILLED, VOLUME, VOLUME_OFF, icon,
+                HEART, HEART_FILLED, MENU, MICROPHONE, NEXT_TRACK, PAUSE, PLAY, PREV_TRACK, REPEAT,
+                REPEAT_OFF, REPEAT_ONCE, SHUFFLE, VOLUME, VOLUME_OFF, icon,
             },
             managed_image::{ManagedImageKey, managed_image},
             menu::{menu, menu_check_item, menu_item},
@@ -54,6 +54,9 @@ pub struct Controls {
     secondary_controls: Entity<SecondaryControls>,
     left_width: Entity<Pixels>,
     right_width: Entity<Pixels>,
+
+    position: Entity<u64>,
+    duration: Entity<u64>,
 }
 
 impl Controls {
@@ -61,12 +64,18 @@ impl Controls {
         let models = cx.global::<Models>();
         let left_width = models.controls_left_width.clone();
         let right_width = models.controls_right_width.clone();
+
+        let position_model = cx.global::<PlaybackInfo>().position.clone();
+        let duration_model = cx.global::<PlaybackInfo>().duration.clone();
+
         cx.new(|cx| Self {
             info_section: InfoSection::new(cx),
             scrubber: Scrubber::new(cx),
             secondary_controls: SecondaryControls::new(cx, show_queue, show_lyrics),
             left_width,
             right_width,
+            position: position_model,
+            duration: duration_model,
         })
     }
 }
@@ -76,53 +85,57 @@ impl Render for Controls {
         let decorations = window.window_decorations();
         let theme = cx.global::<Theme>();
 
+        let position_ms = *self.position.read(cx);
+        let duration_ms = *self.duration.read(cx);
+
         div()
-            .flex()
-            .h(px(68.0))
             .w_full()
-            .bg(theme.background_secondary)
-            .border_t_1()
-            .border_color(theme.border_color)
-            .map(|div| match decorations {
-                Decorations::Server => div,
-                Decorations::Client { tiling } => div
-                    .when(!(tiling.bottom || tiling.left), |div| {
-                        div.rounded_bl(APP_ROUNDING)
+            .h(px(70.0))
+            .child(
+                slider()
+                    .w_full()
+                    .h_0p5()
+                    .id("scrubber-back")
+                    .value(if duration_ms > 0 {
+                        position_ms as f32 / duration_ms as f32
+                    } else {
+                        0.0
                     })
-                    .when(!(tiling.bottom || tiling.right), |div| {
-                        div.rounded_br(APP_ROUNDING)
+                    .on_change(move |v, _, cx| {
+                        let info = cx.global::<PlaybackInfo>().clone();
+
+                        if duration_ms > 0
+                            && *info.playback_state.read(cx) != PlaybackState::Stopped
+                        {
+                            cx.global::<PlaybackInterface>()
+                                .seek(v as f64 * duration_ms as f64 / 1_000.0);
+                        }
                     }),
-            })
-            .on_any_mouse_down(|_, _, cx| {
-                cx.stop_propagation();
-            })
-            .child(
-                resizable(
-                    "controls-left-resizable",
-                    self.left_width.clone(),
-                    ResizeEdge::Right,
-                )
-                .min_size(px(150.0))
-                .max_size(px(500.0))
-                .default_size(DEFAULT_CONTROLS_LEFT_WIDTH)
-                .border_width(px(0.0))
-                .child(AnyView::from(self.info_section.clone()).cached(StyleRefinement::default())),
             )
-            .child(self.scrubber.clone())
             .child(
-                resizable(
-                    "controls-right-resizable",
-                    self.right_width.clone(),
-                    ResizeEdge::Left,
-                )
-                .min_size(px(180.0))
-                .max_size(px(500.0))
-                .default_size(DEFAULT_CONTROLS_RIGHT_WIDTH)
-                .border_width(px(0.0))
-                .child(
-                    AnyView::from(self.secondary_controls.clone())
-                        .cached(StyleRefinement::default().flex().w_full().h_full()),
-                ),
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .w_full()
+                    .h(px(63.0))
+                    .bg(theme.background_secondary)
+                    .map(|div| match decorations {
+                        Decorations::Server => div,
+                        Decorations::Client { tiling } => div
+                            .when(!(tiling.bottom || tiling.left), |div| {
+                                div.rounded_bl(APP_ROUNDING)
+                            })
+                            .when(!(tiling.bottom || tiling.right), |div| {
+                                div.rounded_br(APP_ROUNDING)
+                            }),
+                    })
+                    .on_any_mouse_down(|_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .child(self.info_section.clone())
+                    .child(self.scrubber.clone())
+                    .child(self.secondary_controls.clone()),
             )
     }
 }
@@ -259,18 +272,16 @@ impl Render for InfoSection {
         let content = div()
             .id("info-section")
             .flex()
-            .w_full()
-            .h_full()
+            .h(px(68.0))
             .overflow_x_hidden()
-            .flex_shrink_0()
             .child(
                 div()
-                    .mx(px(12.0))
-                    .mt(px(12.0))
-                    .mb(px(6.0))
+                    .mx(px(6.0))
                     .gap(px(10.0))
                     .flex()
                     .w_full()
+                    .h_full()
+                    .items_center()
                     .overflow_x_hidden()
                     .child(
                         div()
@@ -279,10 +290,9 @@ impl Render for InfoSection {
                             .rounded(px(4.0))
                             .bg(theme.album_art_background)
                             .shadow_sm()
-                            .w(px(36.0))
-                            .h(px(36.0))
-                            .mb(px(6.0))
+                            .size(px(54.0))
                             .flex_shrink_0()
+                            .my_auto()
                             .on_hover(cx.listener(|this, is_hovering: &bool, _, cx| {
                                 if this.is_hovering_art != *is_hovering {
                                     this.is_hovering_art = *is_hovering;
@@ -296,7 +306,7 @@ impl Render for InfoSection {
                                             div()
                                                 .id("album-art-preview")
                                                 .occlude()
-                                                .pb(px(26.0))
+                                                .pb(px(10.0))
                                                 .child(
                                                     managed_image(
                                                         (
@@ -315,8 +325,7 @@ impl Render for InfoSection {
                                 })
                                 .child(
                                     managed_image(("album-art-thumb", image_element_key), key)
-                                        .w(px(36.0))
-                                        .h(px(36.0))
+                                        .size(px(54.0))
                                         .object_fit(ObjectFit::Fill)
                                         .rounded(px(4.0))
                                         .thumb(),
@@ -332,7 +341,6 @@ impl Render for InfoSection {
                                 .flex()
                                 .h_full()
                                 .items_center()
-                                .pb(px(6.0))
                                 .child(tr!(
                                     "APP_NAME",
                                     "Hummingbird",
@@ -358,9 +366,10 @@ impl Render for InfoSection {
                                 .child(
                                     div()
                                         .id("info-section-track-name")
-                                        .font_weight(FontWeight::EXTRA_BOLD)
                                         .text_ellipsis()
                                         .w_full()
+                                        .text_sm()
+                                        .hover(|this| this.underline())
                                         .when_some(album_navigation_track, |this, track| {
                                             this.cursor_pointer().on_click(move |_, _, cx| {
                                                 navigate_to_track_album_and_reveal(cx, &track);
@@ -374,7 +383,9 @@ impl Render for InfoSection {
                                     div()
                                         .id("info-section-artist-name")
                                         .text_ellipsis()
+                                        .text_size(rems(0.7))
                                         .w_full()
+                                        .hover(|this| this.underline())
                                         .when_some(artist_navigation_track, |this, track| {
                                             this.cursor_pointer().on_click(move |_, _, cx| {
                                                 navigate_to_track_artist(cx, &track);
@@ -387,22 +398,21 @@ impl Render for InfoSection {
                         )
                         .when(has_track, |e| {
                             e.child(
-                                div().pb(px(6.0)).h_full().flex().ml_auto().child(
+                                div().flex().child(
                                     div()
                                         .id("info-like")
-                                        .my_auto()
                                         .rounded_sm()
-                                        .p(px(4.0))
+                                        .p(px(6.0))
                                         .cursor_pointer()
                                         .hover(|this| this.bg(theme.button_secondary_hover))
                                         .active(|this| this.bg(theme.button_secondary_active))
                                         .child(
                                             icon(if is_liked.is_some() {
-                                                STAR_FILLED
+                                                HEART_FILLED
                                             } else {
-                                                STAR
+                                                HEART
                                             })
-                                            .size(px(14.0))
+                                            .size_4()
                                             .text_color(if is_liked.is_some() {
                                                 theme.liked_song
                                             } else {
@@ -534,18 +544,15 @@ impl Render for PlaybackSection {
         div()
             .mr(auto())
             .ml(auto())
-            .mt(px(5.0))
             .flex()
             .w_full()
-            .absolute()
+            .items_center()
+            .justify_center()
             .child(
                 div()
-                    .rounded(px(3.0))
-                    .w(px(28.0))
-                    .h(px(25.0))
-                    .mt(px(3.0))
+                    .rounded_sm()
+                    .size_8()
                     .mr(px(6.0))
-                    .ml_auto()
                     .border_color(theme.playback_button_border)
                     .flex()
                     .items_center()
@@ -560,7 +567,7 @@ impl Render for PlaybackSection {
                     .on_click(|_, _, cx| {
                         cx.global::<PlaybackInterface>().toggle_shuffle();
                     })
-                    .child(icon(SHUFFLE).size(px(14.0)).when(*shuffling, |this| {
+                    .child(icon(SHUFFLE).size_4().when(*shuffling, |this| {
                         this.text_color(theme.playback_button_toggled)
                     }))
                     .when_else(
@@ -577,9 +584,8 @@ impl Render for PlaybackSection {
                     .flex()
                     .child(
                         div()
-                            .w(px(30.0))
-                            .h(px(28.0))
-                            .rounded_l(px(3.0))
+                            .size_8()
+                            .rounded_l_sm()
                             .bg(theme.playback_button)
                             .flex()
                             .items_center()
@@ -594,15 +600,14 @@ impl Render for PlaybackSection {
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(Previous), cx);
                             })
-                            .child(icon(PREV_TRACK).size(px(16.0)))
+                            .child(icon(PREV_TRACK).size_4())
                             .tooltip(build_tooltip(tr!("PREVIOUS_TRACK", "Previous Track"))),
                     )
                     .child(
                         context("header-play-button-context")
                             .with(
                                 div()
-                                    .w(px(32.0))
-                                    .h(px(28.0))
+                                    .size_8()
                                     .bg(theme.playback_button)
                                     .border_l(px(1.0))
                                     .border_r(px(1.0))
@@ -624,11 +629,11 @@ impl Render for PlaybackSection {
                                         window.dispatch_action(Box::new(PlayPause), cx);
                                     })
                                     .when(*state == PlaybackState::Playing, |div| {
-                                        div.child(icon(PAUSE).size(px(16.0)))
+                                        div.child(icon(PAUSE).size_4())
                                             .tooltip(build_tooltip(tr!("PAUSE")))
                                     })
                                     .when(*state != PlaybackState::Playing, |div| {
-                                        div.child(icon(PLAY).size(px(16.0)))
+                                        div.child(icon(PLAY).size_4())
                                             .tooltip(build_tooltip(tr!("PLAY")))
                                     })
                                     .when(stop_after_current, |this| {
@@ -659,9 +664,8 @@ impl Render for PlaybackSection {
                     )
                     .child(
                         div()
-                            .w(px(30.0))
-                            .h(px(28.0))
-                            .rounded_r(px(3.0))
+                            .size_8()
+                            .rounded_r_sm()
                             .bg(theme.playback_button)
                             .flex()
                             .items_center()
@@ -676,103 +680,95 @@ impl Render for PlaybackSection {
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(Next), cx);
                             })
-                            .child(icon(NEXT_TRACK).size(px(16.0)))
+                            .child(icon(NEXT_TRACK).size_4())
                             .tooltip(build_tooltip(tr!("NEXT_TRACK", "Next Track"))),
                     ),
             )
             .child(
-                div().mr_auto().child(
-                    context("repeat-context")
-                        .with(
-                            div()
-                                .rounded(px(3.0))
-                                .w(px(28.0))
-                                .h(px(25.0))
-                                .mt(px(3.0))
-                                .ml(px(6.0))
-                                .border_color(theme.playback_button_border)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .hover(|style| {
-                                    style.bg(theme.playback_button_hover).cursor_pointer()
-                                })
-                                .id("header-repeat-button")
-                                .active(|style| style.bg(theme.playback_button_active))
-                                .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                                    cx.stop_propagation();
-                                    window.prevent_default();
-                                })
-                                .on_click(move |_, _, cx| match repeating {
-                                    RepeatState::NotRepeating => cx
-                                        .global::<PlaybackInterface>()
-                                        .set_repeat(RepeatState::Repeating),
-                                    RepeatState::Repeating => cx
-                                        .global::<PlaybackInterface>()
-                                        .set_repeat(RepeatState::RepeatingOne),
-                                    RepeatState::RepeatingOne => cx
-                                        .global::<PlaybackInterface>()
-                                        .set_repeat(RepeatState::NotRepeating),
-                                })
-                                .tooltip(build_tooltip(match repeating {
-                                    RepeatState::NotRepeating => {
+                context("repeat-context")
+                    .with(
+                        div()
+                            .rounded_sm()
+                            .size_8()
+                            .ml(px(6.0))
+                            .border_color(theme.playback_button_border)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|style| style.bg(theme.playback_button_hover).cursor_pointer())
+                            .id("header-repeat-button")
+                            .active(|style| style.bg(theme.playback_button_active))
+                            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            })
+                            .on_click(move |_, _, cx| match repeating {
+                                RepeatState::NotRepeating => cx
+                                    .global::<PlaybackInterface>()
+                                    .set_repeat(RepeatState::Repeating),
+                                RepeatState::Repeating => cx
+                                    .global::<PlaybackInterface>()
+                                    .set_repeat(RepeatState::RepeatingOne),
+                                RepeatState::RepeatingOne => cx
+                                    .global::<PlaybackInterface>()
+                                    .set_repeat(RepeatState::NotRepeating),
+                            })
+                            .tooltip(build_tooltip(match repeating {
+                                RepeatState::NotRepeating => {
+                                    tr!("REPEAT")
+                                }
+                                RepeatState::Repeating => tr!("REPEAT_ONE"),
+                                RepeatState::RepeatingOne => {
+                                    if always_repeat {
                                         tr!("REPEAT")
+                                    } else {
+                                        tr!("STOP_REPEATING", "Stop Repeating")
                                     }
-                                    RepeatState::Repeating => tr!("REPEAT_ONE"),
-                                    RepeatState::RepeatingOne => {
-                                        if always_repeat {
-                                            tr!("REPEAT")
-                                        } else {
-                                            tr!("STOP_REPEATING", "Stop Repeating")
-                                        }
-                                    }
-                                }))
-                                .child(
-                                    icon(match repeating {
-                                        RepeatState::NotRepeating | RepeatState::Repeating => {
-                                            REPEAT
-                                        }
-                                        RepeatState::RepeatingOne => REPEAT_ONCE,
-                                    })
-                                    .size(px(14.0))
-                                    .text_color(repeat_icon_color),
-                                ),
-                        )
-                        .child(
-                            div().bg(theme.elevated_background).child(
-                                menu()
-                                    .when(!always_repeat, |menu| {
-                                        menu.item(menu_item(
-                                            "repeat-not-repeat",
-                                            Some(REPEAT_OFF),
-                                            tr!("REPEAT_OFF", "Off"),
-                                            move |_, _, cx| {
-                                                cx.global::<PlaybackInterface>()
-                                                    .set_repeat(RepeatState::NotRepeating);
-                                            },
-                                        ))
-                                    })
-                                    .item(menu_item(
-                                        "repeat-repeat",
-                                        Some(REPEAT),
-                                        tr!("REPEAT", "Repeat"),
+                                }
+                            }))
+                            .child(
+                                icon(match repeating {
+                                    RepeatState::NotRepeating | RepeatState::Repeating => REPEAT,
+                                    RepeatState::RepeatingOne => REPEAT_ONCE,
+                                })
+                                .size_4()
+                                .text_color(repeat_icon_color),
+                            ),
+                    )
+                    .child(
+                        div().bg(theme.elevated_background).child(
+                            menu()
+                                .when(!always_repeat, |menu| {
+                                    menu.item(menu_item(
+                                        "repeat-not-repeat",
+                                        Some(REPEAT_OFF),
+                                        tr!("REPEAT_OFF", "Off"),
                                         move |_, _, cx| {
                                             cx.global::<PlaybackInterface>()
-                                                .set_repeat(RepeatState::Repeating);
+                                                .set_repeat(RepeatState::NotRepeating);
                                         },
                                     ))
-                                    .item(menu_item(
-                                        "repeat-repeat-one",
-                                        Some(REPEAT_ONCE),
-                                        tr!("REPEAT_ONE", "Repeat One"),
-                                        move |_, _, cx| {
-                                            cx.global::<PlaybackInterface>()
-                                                .set_repeat(RepeatState::RepeatingOne);
-                                        },
-                                    )),
-                            ),
+                                })
+                                .item(menu_item(
+                                    "repeat-repeat",
+                                    Some(REPEAT),
+                                    tr!("REPEAT", "Repeat"),
+                                    move |_, _, cx| {
+                                        cx.global::<PlaybackInterface>()
+                                            .set_repeat(RepeatState::Repeating);
+                                    },
+                                ))
+                                .item(menu_item(
+                                    "repeat-repeat-one",
+                                    Some(REPEAT_ONCE),
+                                    tr!("REPEAT_ONE", "Repeat One"),
+                                    move |_, _, cx| {
+                                        cx.global::<PlaybackInterface>()
+                                            .set_repeat(RepeatState::RepeatingOne);
+                                    },
+                                )),
                         ),
-                ),
+                    ),
             )
     }
 }
@@ -822,70 +818,45 @@ impl Render for Scrubber {
         div()
             .pl(px(13.0))
             .pr(px(13.0))
-            .border_x(px(1.0))
-            .border_color(theme.border_color)
-            .flex_grow()
             .flex()
             .flex_col()
             .text_size(px(15.0))
             .font_weight(FontWeight::SEMIBOLD)
             .relative()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .relative()
-                    .items_end()
-                    .mt(px(6.0))
-                    .mb(px(6.0))
-                    .child(
-                        div()
-                            .mr(px(6.0))
-                            .line_height(rems(1.0))
-                            .child(format_duration(position_secs as i64, true)),
-                    )
-                    .when(window_width > px(900.0), |this| {
-                        this.child(
-                            div()
-                                .line_height(rems(1.0))
-                                .border_color(rgb(0x4b5563))
-                                .border_l(px(2.0))
-                                .pl(px(6.0))
-                                .text_color(rgb(0xcbd5e1))
-                                .child(format_duration(duration_secs as i64, true)),
-                        )
-                    })
-                    .child(self.playback_section.clone())
-                    .child(div().h(px(30.0)))
-                    .child(
-                        div()
-                            .ml(auto())
-                            .line_height(rems(1.0))
-                            .child(format!("-{}", format_duration(remaining_secs as i64, true))),
-                    ),
-            )
-            .child(
-                slider()
-                    .w_full()
-                    .h(px(6.0))
-                    .rounded(px(3.0))
-                    .id("scrubber-back")
-                    .value(if duration_ms > 0 {
-                        position_ms as f32 / duration_ms as f32
-                    } else {
-                        0.0
-                    })
-                    .on_change(move |v, _, cx| {
-                        let info = cx.global::<PlaybackInfo>().clone();
-
-                        if duration_ms > 0
-                            && *info.playback_state.read(cx) != PlaybackState::Stopped
-                        {
-                            cx.global::<PlaybackInterface>()
-                                .seek(v as f64 * duration_ms as f64 / 1_000.0);
-                        }
-                    }),
-            )
+            .items_center()
+            .justify_center()
+            .child(self.playback_section.clone())
+        // .child(
+        //     div()
+        //         .w_full()
+        //         .flex()
+        //         .relative()
+        //         .items_end()
+        //         .child(
+        //             div()
+        //                 .mr(px(6.0))
+        //                 .line_height(rems(1.0))
+        //                 .child(format_duration(position_secs as i64, true)),
+        //         )
+        //         .when(window_width > px(900.0), |this| {
+        //             this.child(
+        //                 div()
+        //                     .line_height(rems(1.0))
+        //                     .border_color(rgb(0x4b5563))
+        //                     .border_l(px(2.0))
+        //                     .pl(px(6.0))
+        //                     .text_color(rgb(0xcbd5e1))
+        //                     .child(format_duration(duration_secs as i64, true)),
+        //             )
+        //         })
+        //         .child(self.playback_section.clone())
+        //         .child(
+        //             div()
+        //                 .ml(auto())
+        //                 .line_height(rems(1.0))
+        //                 .child(format!("-{}", format_duration(remaining_secs as i64, true))),
+        //         ),
+        // )
     }
 }
 
@@ -920,10 +891,8 @@ impl RenderOnce for SidebarToggleButton {
         };
 
         self.div
-            .rounded(px(3.0))
-            .w(px(25.0))
-            .h(px(25.0))
-            .mt(px(2.0))
+            .rounded_sm()
+            .p(px(6.0))
             .flex()
             .items_center()
             .justify_center()
@@ -932,7 +901,7 @@ impl RenderOnce for SidebarToggleButton {
             .cursor_pointer()
             .hover(|this| this.bg(theme.playback_button_hover))
             .active(|this| this.bg(theme.playback_button_active))
-            .child(icon(self.icon_path).size(px(14.0)).text_color(icon_color))
+            .child(icon(self.icon_path).size_4().text_color(icon_color))
     }
 }
 
@@ -986,19 +955,17 @@ impl Render for SecondaryControls {
         let lyrics_active = *self.show_lyrics.read(cx);
         let queue_active = *self.show_queue.read(cx);
 
-        div().flex().w_full().h_full().child(
+        div().flex().h_full().child(
             div()
                 .px(px(18.0))
                 .flex()
-                .w_full()
-                .my_auto()
-                .pb(px(2.0))
+                .items_center()
+                .justify_center()
+                .h_full()
                 .child(
                     div()
-                        .rounded(px(3.0))
-                        .w(px(25.0))
-                        .h(px(25.0))
-                        .mt(px(2.0))
+                        .rounded_sm()
+                        .p(px(6.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1009,14 +976,14 @@ impl Render for SecondaryControls {
                         .hover(|this| this.bg(theme.playback_button_hover))
                         .active(|this| this.bg(theme.playback_button_active))
                         .when(volume <= 0.0, |div| {
-                            div.child(icon(VOLUME_OFF).size(px(14.0)))
+                            div.child(icon(VOLUME_OFF).size_4())
                                 .on_click(move |_, _, cx| {
                                     cx.global::<PlaybackInterface>().set_volume(prev_volume);
                                 })
                                 .tooltip(build_tooltip(tr!("UNMUTE", "Unmute")))
                         })
                         .when(volume > 0.0, |div| {
-                            div.child(icon(VOLUME).size(px(14.0)))
+                            div.child(icon(VOLUME).size_4())
                                 .on_click(move |_, _, cx| {
                                     cx.global::<PlaybackInterface>().set_volume(0 as f64);
                                 })
@@ -1033,9 +1000,8 @@ impl Render for SecondaryControls {
                         .child(
                             slider()
                                 .w_full()
-                                .h(px(6.0))
-                                .mt(px(11.0))
-                                .rounded(px(3.0))
+                                .h(px(5.0))
+                                .rounded(px(2.5))
                                 .id("volume")
                                 .value((volume) as f32)
                                 .on_double_click(|_, cx| {
@@ -1063,7 +1029,6 @@ impl Render for SecondaryControls {
                     div()
                         .h(px(24.0))
                         .w(px(1.0))
-                        .mt(px(3.0))
                         .mx(px(4.0))
                         .bg(theme.border_color),
                 )

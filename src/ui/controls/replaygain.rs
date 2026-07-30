@@ -53,10 +53,8 @@ impl Render for ReplayGainButton {
             .relative()
             .child(
                 div()
-                    .rounded(px(3.0))
-                    .w(px(25.0))
-                    .h(px(25.0))
-                    .mt(px(2.0))
+                    .rounded_sm()
+                    .p(px(6.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -79,7 +77,7 @@ impl Render for ReplayGainButton {
                     )
                     .child(
                         icon(ADJUSTMENTS)
-                            .size(px(14.0))
+                            .size_4()
                             .when(rg_mode != ReplayGainMode::Off, |this| {
                                 this.text_color(theme.playback_button_toggled)
                             }),

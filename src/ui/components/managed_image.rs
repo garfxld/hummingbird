@@ -21,6 +21,12 @@ use crate::{
     util::rgb_to_bgr,
 };
 
+fn crop_to_square(image: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = image.dimensions();
+    let side = w.min(h);
+    imageops::crop_imm(image, (w - side) / 2, (h - side) / 2, side, side).to_image()
+}
+
 fn decode_rgba_to_render_image(mut image: image::RgbaImage) -> anyhow::Result<Arc<RenderImage>> {
     rgb_to_bgr(&mut image);
     let mut frames: SmallVec<[_; 1]> = SmallVec::new();
@@ -30,7 +36,7 @@ fn decode_rgba_to_render_image(mut image: image::RgbaImage) -> anyhow::Result<Ar
 
 fn decode_to_render_image(data: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
     let image = image::load_from_memory(data)?.to_rgba8();
-    decode_rgba_to_render_image(image)
+    decode_rgba_to_render_image(crop_to_square(&image))
 }
 
 #[derive(Clone)]
@@ -66,6 +72,7 @@ impl ManagedImageKey {
                             return Ok(None);
                         };
 
+                        image = crop_to_square(&image);
                         if thumb {
                             image = imageops::thumbnail(&image, 72, 72);
                         }
