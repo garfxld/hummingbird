@@ -18,19 +18,14 @@ use crate::{
         components::{
             context::context,
             icons::{
-                CHEVRON_DOWN, CHEVRON_RIGHT, FILE, FOLDER, FOLDER_OPEN, MUSIC, PLAY, PLAYLIST_ADD,
-                STAR, STAR_FILLED, icon,
+                CHEVRON_DOWN, CHEVRON_RIGHT, FILE, FOLDER, FOLDER_OPEN, HEART, HEART_FILLED, MUSIC, PLAY, PLAYLIST_ADD, icon
             },
             managed_image::{ManagedImageKey, managed_image},
             menu::{menu, menu_item, menu_separator},
         },
         library::{
             add_to_playlist::AddToPlaylist,
-            context_menus::track::TrackContextMenu,
-            context_menus::{
-                TrackContextMenuContext, add_to_playlist_state, navigate_to_track_album_and_reveal,
-                play_items_next, play_items_now, queue_items,
-            },
+            context_menus::{TrackContextMenuContext, add_to_playlist_state, navigate_to_track_album_and_reveal, play_items_next, play_items_now, queue_items, track::TrackContextMenu},
             files_view::{FilesView, FlatRow, TrackRef, file_context_menu::FileContextMenu},
         },
         models::{
@@ -198,7 +193,7 @@ impl FileRowItem {
                     ))
                     .item(menu_item(
                         "files_multi_like",
-                        Some(if any_liked { STAR_FILLED } else { STAR }),
+                        Some(if any_liked { HEART_FILLED } else { HEART }),
                         if any_liked {
                             tr!("UNLIKE")
                         } else {

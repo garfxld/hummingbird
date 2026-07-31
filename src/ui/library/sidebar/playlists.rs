@@ -26,7 +26,7 @@ use crate::{
                 DragDropListManager, DragPreview, DropIndicator, TrackDragData,
                 check_drag_cancelled, handle_drag_move, handle_drop,
             },
-            icons::{CROSS, FILE_EXPORT, PENCIL, PLAY, PLAYLIST, PLUS, SHUFFLE, STAR},
+            icons::{CROSS, FILE_EXPORT, HEART, PENCIL, PLAY, PLAYLIST, PLUS, SHUFFLE},
             menu::{menu, menu_item, menu_separator},
             popover::{PopoverPosition, popover},
             scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
@@ -308,7 +308,7 @@ impl Render for PlaylistList {
 
             let mut item = sidebar_item(("main-sidebar-pl", playlist.id as u64)).icon(
                 if playlist.playlist_type == PlaylistType::System {
-                    STAR
+                    HEART
                 } else {
                     PLAYLIST
                 },

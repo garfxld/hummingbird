@@ -4,12 +4,13 @@ use cntp_i18n::tr;
 use gpui::prelude::FluentBuilder;
 use gpui::{Entity, IntoElement, RenderOnce, Window};
 
+use crate::ui::components::icons::{HEART, HEART_FILLED};
 use crate::{
     library::types::Track,
     ui::{
         availability::is_track_path_available,
         components::{
-            icons::{DISC, FOLDER_SEARCH, PLAYLIST_ADD, STAR, STAR_FILLED, USERS},
+            icons::{DISC, FOLDER_SEARCH, PLAYLIST_ADD, USERS},
             menu::{menu, menu_item, menu_separator},
         },
         models::toggle_like_by_id,
@@ -99,9 +100,9 @@ impl RenderOnce for InfoSectionContextMenu {
                 menu.item(menu_separator()).item(menu_item(
                     "info_section_toggle_like",
                     Some(if is_liked.is_some() {
-                        STAR_FILLED
+                        HEART_FILLED
                     } else {
-                        STAR
+                        HEART
                     }),
                     if is_liked.is_some() {
                         tr!("UNLIKE")

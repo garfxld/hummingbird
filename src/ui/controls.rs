@@ -34,10 +34,7 @@ use std::{path::PathBuf, rc::Rc};
 
 use self::replaygain::ReplayGainButton;
 use super::{
-    components::{
-        resizable::{ResizeEdge, resizable},
-        slider::slider,
-    },
+    components::slider::slider,
     constants::APP_ROUNDING,
     global_actions::{Next, PlayPause, Previous, StopAfterCurrent},
     models::{Models, PlaybackInfo},
@@ -45,26 +42,17 @@ use super::{
 };
 
 use crate::library::types::Track;
-use crate::settings::storage::{DEFAULT_CONTROLS_LEFT_WIDTH, DEFAULT_CONTROLS_RIGHT_WIDTH};
-use crate::ui::util::format_duration;
 
 pub struct Controls {
     info_section: Entity<InfoSection>,
     scrubber: Entity<Scrubber>,
     secondary_controls: Entity<SecondaryControls>,
-    left_width: Entity<Pixels>,
-    right_width: Entity<Pixels>,
-
     position: Entity<u64>,
     duration: Entity<u64>,
 }
 
 impl Controls {
     pub fn new(cx: &mut App, show_queue: Entity<bool>, show_lyrics: Entity<bool>) -> Entity<Self> {
-        let models = cx.global::<Models>();
-        let left_width = models.controls_left_width.clone();
-        let right_width = models.controls_right_width.clone();
-
         let position_model = cx.global::<PlaybackInfo>().position.clone();
         let duration_model = cx.global::<PlaybackInfo>().duration.clone();
 
@@ -72,8 +60,6 @@ impl Controls {
             info_section: InfoSection::new(cx),
             scrubber: Scrubber::new(cx),
             secondary_controls: SecondaryControls::new(cx, show_queue, show_lyrics),
-            left_width,
-            right_width,
             position: position_model,
             duration: duration_model,
         })
@@ -774,47 +760,19 @@ impl Render for PlaybackSection {
 }
 
 pub struct Scrubber {
-    position: Entity<u64>,
-    duration: Entity<u64>,
     playback_section: Entity<PlaybackSection>,
 }
 
 impl Scrubber {
     fn new(cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| {
-            let position_model = cx.global::<PlaybackInfo>().position.clone();
-            let duration_model = cx.global::<PlaybackInfo>().duration.clone();
-
-            cx.observe(&position_model, |_, _, cx| {
-                cx.notify();
-            })
-            .detach();
-
-            cx.observe(&duration_model, |_, _, cx| {
-                cx.notify();
-            })
-            .detach();
-
-            Self {
-                position: position_model,
-                duration: duration_model,
-                playback_section: PlaybackSection::new(cx),
-            }
+        cx.new(|cx| Self {
+            playback_section: PlaybackSection::new(cx),
         })
     }
 }
 
 impl Render for Scrubber {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.global::<Theme>();
-        let position_ms = *self.position.read(cx);
-        let duration_ms = *self.duration.read(cx);
-        let position_secs = position_ms / 1_000;
-        let duration_secs = duration_ms / 1_000;
-        let remaining_secs = duration_secs.saturating_sub(position_secs);
-
-        let window_width = window.viewport_size().width;
-
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .pl(px(13.0))
             .pr(px(13.0))
@@ -826,37 +784,6 @@ impl Render for Scrubber {
             .items_center()
             .justify_center()
             .child(self.playback_section.clone())
-        // .child(
-        //     div()
-        //         .w_full()
-        //         .flex()
-        //         .relative()
-        //         .items_end()
-        //         .child(
-        //             div()
-        //                 .mr(px(6.0))
-        //                 .line_height(rems(1.0))
-        //                 .child(format_duration(position_secs as i64, true)),
-        //         )
-        //         .when(window_width > px(900.0), |this| {
-        //             this.child(
-        //                 div()
-        //                     .line_height(rems(1.0))
-        //                     .border_color(rgb(0x4b5563))
-        //                     .border_l(px(2.0))
-        //                     .pl(px(6.0))
-        //                     .text_color(rgb(0xcbd5e1))
-        //                     .child(format_duration(duration_secs as i64, true)),
-        //             )
-        //         })
-        //         .child(self.playback_section.clone())
-        //         .child(
-        //             div()
-        //                 .ml(auto())
-        //                 .line_height(rems(1.0))
-        //                 .child(format!("-{}", format_duration(remaining_secs as i64, true))),
-        //         ),
-        // )
     }
 }
 

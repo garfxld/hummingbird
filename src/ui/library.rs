@@ -33,6 +33,7 @@ use crate::{
             sidebar::Sidebar,
             update_playlist::UpdatePlaylist,
         },
+        theme::Theme,
     },
 };
 
@@ -592,6 +593,7 @@ impl Render for Library {
             .read(cx);
         let full_width = settings.interface.effective_full_width();
         let two_column = settings.interface.two_column_library;
+        let theme = cx.global::<Theme>().clone();
 
         fn render_library_view(view: &LibraryView) -> AnyElement {
             match view {
@@ -605,8 +607,27 @@ impl Render for Library {
             }
         }
 
-        let single_column = |view: &LibraryView| {
+        fn content_glow(_theme: &Theme) -> AnyElement {
             div()
+                .absolute()
+                .top(px(-200.0))
+                .left(px(0.))
+                .size(px(400.0))
+                .rounded_full()
+                .bg(transparent_black())
+                .shadow(vec![BoxShadow {
+                    color: Hsla::from(rgb(0x3E7BD6)).opacity(0.75),
+                    blur_radius: px(380.0),
+                    spread_radius: px(0.0),
+                    offset: point(px(0.0), px(0.0)),
+                    inset: false,
+                }])
+                .into_any_element()
+        }
+
+        let single_column = |view: &LibraryView, theme: &Theme| {
+            div()
+                .relative()
                 .w_full()
                 .when(!full_width, |this: Div| this.max_w(px(TABLE_MAX_WIDTH)))
                 .h_full()
@@ -615,6 +636,7 @@ impl Render for Library {
                 .flex_shrink()
                 .mr_auto()
                 .overflow_hidden()
+                .child(content_glow(theme))
                 .child(render_library_view(view))
                 .into_any_element()
         };
@@ -640,12 +662,14 @@ impl Render for Library {
                 .clone();
 
             div()
+                .relative()
                 .w_full()
                 .h_full()
                 .flex()
                 .flex_shrink()
                 .mr_auto()
                 .overflow_hidden()
+                .child(content_glow(&theme))
                 .child(
                     resizable("split-resizable", split_width_model, ResizeEdge::Right)
                         .percent_mode()
@@ -677,10 +701,10 @@ impl Render for Library {
                 .into_any_element()
         } else if two_column {
             // single column - two column mode but views not available
-            single_column(self.left_view.as_ref().unwrap_or(&self.view))
+            single_column(self.left_view.as_ref().unwrap_or(&self.view), &theme)
         } else {
             // single column - two column mode disabled
-            single_column(&self.view)
+            single_column(&self.view, &theme)
         };
 
         div()

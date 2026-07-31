@@ -7,7 +7,7 @@ use gpui::{
 use std::{rc::Rc, sync::Arc};
 
 use crate::ui::components::drag_drop::{DragPreview, TrackDragData};
-use crate::ui::components::icons::{STAR, STAR_FILLED, icon};
+use crate::ui::components::icons::{HEART, HEART_FILLED, icon};
 use crate::ui::library::context_menus::play_track_next;
 use crate::ui::library::context_menus::track::TrackContextMenu;
 use crate::ui::models::{
@@ -20,7 +20,7 @@ use crate::ui::{
     availability::is_track_available,
     components::context::context,
     library::context_menus::{PlaylistMenuInfo, TrackContextMenuContext, play_from_track_listing},
-    models::PlaybackInfo,
+    //  models::PlaybackInfo,
     theme::Theme,
 };
 
@@ -132,7 +132,7 @@ impl Render for TrackItem {
             .as_ref()
             .map(|max_num_str| measure_track_number_width(window, max_num_str))
             .unwrap_or(px(22.0));
-        let current_track = cx.global::<PlaybackInfo>().current_track.read(cx).clone();
+        // let current_track = cx.global::<PlaybackInfo>().current_track.read(cx).clone();
         let is_available = self.is_available;
 
         let track_location_for_drag = self.track.location.clone();
@@ -195,9 +195,7 @@ impl Render for TrackItem {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         // 22px (from track # width) + 18 + 11
                                         .px(px(track_num_width.to_f64() as f32 + 18.0 + 13.0))
-                                        .border_b_1()
                                         .w_full()
-                                        .border_color(theme.border_color)
                                         .mt(px(18.0))
                                         .pb(px(6.0))
                                         .text_ellipsis()
@@ -234,16 +232,15 @@ impl Render for TrackItem {
                                 div()
                                     .flex()
                                     .flex_row()
-                                    .border_b_1()
-                                    .h(px(39.0))
                                     .id(("track", self.track.id as u64))
                                     .w_full()
                                     .border_color(theme.border_color)
                                     .when(is_available, |this| this.cursor_pointer())
                                     .when(!is_available, |this| this.cursor_default())
                                     .px(px(18.0))
-                                    .py(px(6.0))
+                                    .py_1p5()
                                     .group(self.hover_group.clone())
+                                    .bg(gpui::transparent_black())
                                     .when(is_available, |this| {
                                         this.hover(|this| this.bg(theme.nav_button_hover))
                                             .active(|this| this.bg(theme.nav_button_active))
@@ -263,13 +260,6 @@ impl Render for TrackItem {
                                             },
                                         )
                                     })
-                                    .when_some(current_track, |this, track| {
-                                        this.bg(if track == self.track.location {
-                                            theme.queue_item_current
-                                        } else {
-                                            theme.background_primary
-                                        })
-                                    })
                                     .max_w_full()
                                     .when(self.left_field == TrackItemLeftField::TrackNum, |this| {
                                         this.child(
@@ -278,6 +268,7 @@ impl Render for TrackItem {
                                                 .flex_shrink_0()
                                                 .text_align(TextAlign::Right)
                                                 .mr(px(13.0))
+                                                .my_auto()
                                                 .text_color(theme.text_secondary)
                                                 // TODO: handle these numerals better
                                                 .child(format!(
@@ -307,28 +298,34 @@ impl Render for TrackItem {
                                     })
                                     .child(
                                         div()
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .flex()
+                                            .flex_col()
+                                            .flex_grow()
                                             .overflow_x_hidden()
-                                            .text_ellipsis()
-                                            .mr_auto()
-                                            .child(self.track.title.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::LIGHT)
-                                            .text_sm()
+                                            .min_w(px(0.0))
                                             .my_auto()
-                                            .text_color(theme.text_secondary)
-                                            .text_ellipsis()
-                                            .overflow_x_hidden()
-                                            .flex_shrink()
-                                            .ml(px(12.0))
-                                            .when(show_artist_name, |this| {
-                                                this.when_some(
-                                                    self.track.artist_names.clone(),
-                                                    |this, v| this.child(v.0),
-                                                )
-                                            }),
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .overflow_x_hidden()
+                                                    .text_ellipsis()
+                                                    .mr_auto()
+                                                    .child(self.track.title.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::LIGHT)
+                                                    .text_xs()
+                                                    .text_color(theme.text_secondary)
+                                                    .text_ellipsis()
+                                                    .overflow_hidden()
+                                                    .when(show_artist_name, |this| {
+                                                        this.when_some(
+                                                            self.track.artist_names.clone(),
+                                                            |this, v| this.child(v.0),
+                                                        )
+                                                    }),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -339,9 +336,9 @@ impl Render for TrackItem {
                                             .p(px(4.0))
                                             .child(
                                                 icon(if self.is_liked.is_some() {
-                                                    STAR_FILLED
+                                                    HEART_FILLED
                                                 } else {
-                                                    STAR
+                                                    HEART
                                                 })
                                                 .size(px(14.0))
                                                 .text_color(if self.is_liked.is_some() {
@@ -366,13 +363,12 @@ impl Render for TrackItem {
                                     )
                                     .child(
                                         div()
-                                            .ml(px(10.0))
+                                            .mr_1p5()
                                             .flex_shrink_0()
                                             .min_w(px(60.0))
-                                            .border_l_1()
-                                            .pl(px(10.0))
-                                            .border_color(theme.border_color)
+                                            .text_sm()
                                             .text_align(TextAlign::Right)
+                                            .my_auto()
                                             .child(format_duration(self.track.duration, false)),
                                     ),
                             ),

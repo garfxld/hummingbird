@@ -1,4 +1,4 @@
-use crate::ui::util::format_duration;
+use crate::ui::components::icons::{HEART, HEART_FILLED};
 use crate::{
     library::db::LibraryAccess,
     playback::{interface::PlaybackInterface, queue::QueueItemData},
@@ -13,7 +13,7 @@ use crate::{
                 continue_edge_scroll, handle_external_drag_move, handle_track_drag_move,
                 handle_track_drop_multi,
             },
-            icons::{CROSS, DISC, PLAYLIST_ADD, STAR, STAR_FILLED, TRASH, USERS, icon},
+            icons::{CROSS, DISC, PLAYLIST_ADD, TRASH, USERS, icon},
             managed_image::{ManagedImageKey, managed_image},
             menu::{menu, menu_item, menu_separator},
             nav_button::nav_button,
@@ -292,7 +292,7 @@ impl Render for QueueItem {
                         .overflow_x_hidden()
                         .gap(px(11.0))
                         .h(px(QUEUE_ITEM_HEIGHT))
-                        .px(px(17.0))
+                        .px(px(11.0))
                         .py(px(11.0))
                         // add extra padding when the scrollbar is always drawn
                         // 11px queue item pad + 4px scrollbar + 10px buffer
@@ -300,9 +300,9 @@ impl Render for QueueItem {
                         .when(is_available, |div| div.cursor_pointer())
                         .when(!is_available, |div| div.cursor_default().opacity(0.5))
                         .relative()
-                        // Default bottom border - always present
-                        .border_b(px(1.0))
-                        .border_color(theme.border_color)
+                        // // Default bottom border - always present
+                        // .border_b(px(1.0))
+                        // .border_color(theme.border_color)
                         .when(item_state.is_being_dragged, |div| div.opacity(0.5))
                         .when(is_selected && !item_state.is_being_dragged, |div| {
                             div.bg(theme.queue_item_selected)
@@ -405,14 +405,12 @@ impl Render for QueueItem {
                                 .rounded(px(4.0))
                                 .bg(theme.album_art_background)
                                 .shadow_sm()
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .size_10()
                                 .flex_shrink_0()
                                 .when_some(image_key, |div, key| {
                                     div.child(
                                         managed_image(("queue-art", idx), key)
-                                            .w(px(36.0))
-                                            .h(px(36.0))
+                                            .size_10()
                                             .object_fit(ObjectFit::Fill)
                                             .rounded(px(4.0))
                                             .thumb(),
@@ -429,15 +427,11 @@ impl Render for QueueItem {
                                 .w_full()
                                 .overflow_x_hidden()
                                 .child(
-                                    div()
-                                        .w_full()
-                                        .text_ellipsis()
-                                        .font_weight(FontWeight::EXTRA_BOLD)
-                                        .child(
-                                            item.name
-                                                .clone()
-                                                .unwrap_or_else(|| tr!("UNKNOWN_TRACK").into()),
-                                        ),
+                                    div().w_full().text_ellipsis().text_sm().child(
+                                        item.name
+                                            .clone()
+                                            .unwrap_or_else(|| tr!("UNKNOWN_TRACK").into()),
+                                    ),
                                 )
                                 .child(
                                     div()
@@ -451,20 +445,20 @@ impl Render for QueueItem {
                                                 .text_ellipsis()
                                                 .overflow_x_hidden()
                                                 .flex_shrink()
+                                                .text_xs()
                                                 .child(item.artist_name.clone().unwrap_or_else(
                                                     || tr!("UNKNOWN_ARTIST").into(),
                                                 )),
-                                        )
-                                        .when_some(item.duration, |child, duration| {
-                                            child.child(
-                                                div()
-                                                    .flex_shrink_0()
-                                                    .ml(px(6.0))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme.text_secondary)
-                                                    .child(format_duration(duration, true)),
-                                            )
-                                        }),
+                                        ), // .when_some(item.duration, |child, duration| {
+                                           //     child.child(
+                                           //         div()
+                                           //             .flex_shrink_0()
+                                           //             .ml(px(6.0))
+                                           //             .font_weight(FontWeight::SEMIBOLD)
+                                           //             .text_color(theme.text_secondary)
+                                           //             .child(format_duration(duration, true)),
+                                           //     )
+                                           // }),
                                 ),
                         ),
                 )
@@ -516,7 +510,7 @@ impl Render for QueueItem {
                             let liked_ids = liked_ids.clone();
                             menu.item(menu_item(
                                 "toggle_like",
-                                Some(if any_liked { STAR_FILLED } else { STAR }),
+                                Some(if any_liked { HEART_FILLED } else { HEART }),
                                 if any_liked {
                                     tr!("UNLIKE")
                                 } else {
@@ -632,7 +626,7 @@ impl Render for QueueItem {
                                 menu.item(
                                     menu_item(
                                         "toggle_like",
-                                        Some(if is_liked { STAR_FILLED } else { STAR }),
+                                        Some(if is_liked { HEART_FILLED } else { HEART }),
                                         if is_liked { tr!("UNLIKE") } else { tr!("LIKE") },
                                         move |_, _, cx| {
                                             toggle_like(track_id, entity.clone(), cx);

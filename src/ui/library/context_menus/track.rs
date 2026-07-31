@@ -4,15 +4,13 @@ use cntp_i18n::tr;
 use gpui::prelude::FluentBuilder;
 use gpui::{Entity, IntoElement, RenderOnce, SharedString, Window};
 
+use crate::ui::components::icons::{HEART, HEART_FILLED};
 use crate::{
     library::types::Track,
     ui::{
         availability::is_track_path_available,
         components::{
-            icons::{
-                DISC, FOLDER_SEARCH, PLAY, PLAYLIST_ADD, PLAYLIST_REMOVE, PLUS, STAR, STAR_FILLED,
-                USERS,
-            },
+            icons::{DISC, FOLDER_SEARCH, PLAY, PLAYLIST_ADD, PLAYLIST_REMOVE, PLUS, USERS},
             menu::{menu, menu_item, menu_separator},
         },
         models::{Models, toggle_like_by_id},
@@ -172,9 +170,9 @@ impl RenderOnce for TrackContextMenu {
                 menu_item(
                     "track_toggle_like",
                     Some(if is_liked.is_some() {
-                        STAR_FILLED
+                        HEART_FILLED
                     } else {
-                        STAR
+                        HEART
                     }),
                     if is_liked.is_some() {
                         tr!("UNLIKE")

@@ -14,7 +14,7 @@ use crate::{
         types::{Playlist, PlaylistType},
     },
     ui::components::{
-        icons::{PLAYLIST, PLAYLIST_ADD, STAR_FILLED},
+        icons::{HEART_FILLED, PLAYLIST, PLAYLIST_ADD},
         modal::modal,
         palette::{ExtraItem, ExtraItemProvider, FinderItemLeft, Palette, PaletteItem},
     },
@@ -24,7 +24,7 @@ impl PaletteItem for Playlist {
     fn left_content(&self, _: &mut App) -> Option<FinderItemLeft> {
         Some(FinderItemLeft::Icon(match self.playlist_type {
             PlaylistType::User => PLAYLIST.into(),
-            PlaylistType::System => STAR_FILLED.into(),
+            PlaylistType::System => HEART_FILLED.into(),
         }))
     }
 

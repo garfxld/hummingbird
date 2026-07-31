@@ -18,7 +18,7 @@ use crate::{
         caching::hummingbird_cache,
         components::{
             button::{ButtonSize, button},
-            icons::{DOTS_VERTICAL, STAR, STAR_FILLED, icon},
+            icons::{DOTS_VERTICAL, HEART, HEART_FILLED, icon},
             playback_controls::playback_controls,
             popover::{PopoverPosition, popover},
             scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
@@ -88,7 +88,7 @@ impl ReleaseView {
             let track_listing = TrackListing::new(
                 cx,
                 tracks.clone(),
-                ArtistNameVisibility::OnlyIfDifferent(artist_name.clone()),
+                ArtistNameVisibility::Always,
                 album.vinyl_numbering,
                 false,
                 true,
@@ -310,7 +310,7 @@ impl ReleaseView {
             })
             .when(!has_tracks, |this| this.opacity(0.5))
             .child(
-                icon(if all_liked { STAR_FILLED } else { STAR })
+                icon(if all_liked { HEART_FILLED } else { HEART })
                     .size(px(16.0))
                     .text_color(if all_liked {
                         theme.liked_song

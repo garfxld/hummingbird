@@ -30,16 +30,18 @@ use crate::{
                 handle_track_drop,
             },
             dropdown::dropdown,
-            icons::{PLAYLIST, SORT_ASCENDING, SORT_DESCENDING, STAR, icon},
+            icons::{HEART, PLAYLIST, SORT_ASCENDING, SORT_DESCENDING, icon},
             playback_controls::playback_controls,
             scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
             table::table_data::TABLE_MAX_WIDTH,
             tooltip::build_tooltip,
         },
-        library::collection_summary::format_collection_summary,
-        library::track_listing::{
-            ArtistNameVisibility,
-            track_item::{TrackItem, TrackItemLeftField},
+        library::{
+            collection_summary::format_collection_summary,
+            track_listing::{
+                ArtistNameVisibility,
+                track_item::{TrackItem, TrackItemLeftField},
+            },
         },
         models::{Models, PlaylistEvent},
         theme::Theme,
@@ -600,7 +602,7 @@ impl Render for PlaylistView {
                                     .justify_center()
                                     .child(
                                         icon(if self.playlist.playlist_type == PlaylistType::System {
-                                            STAR
+                                            HEART
                                         } else {
                                             PLAYLIST
                                         })

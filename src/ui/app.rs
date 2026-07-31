@@ -55,6 +55,7 @@ use super::{
     controls::Controls,
     global_actions::register_actions,
     header::Header,
+    inspector::register_inspector,
     library::Library,
     models::{self, CurrentTrack, Models, PlaybackInfo, build_models},
     right_sidebar::RightSidebar,
@@ -474,6 +475,7 @@ pub fn run() -> anyhow::Result<()> {
         cx.set_global(power_manager);
 
         register_actions(cx);
+        register_inspector(cx);
 
         let drop_model = cx.new(|_| DropImageDummyModel);
 

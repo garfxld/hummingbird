@@ -12,6 +12,7 @@ pub mod data;
 mod equalizer;
 mod global_actions;
 mod header;
+mod inspector;
 mod keymap;
 pub mod library;
 mod lyrics;
