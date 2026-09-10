@@ -6,14 +6,11 @@ mod update;
 use super::{models::Models, theme::Theme};
 use crate::{
     library::scan::ScanEvent,
-    settings::{Settings, SettingsGlobal},
-    ui::{
-        components::{
-            icons::{FOLDER_SEARCH, icon},
-            menu_bar::MenuBar,
-            window_header::header,
-        },
-        library::nav_buttons::nav_buttons,
+    ui::components::{
+        icons::{FOLDER_BOLT, FOLDER_SEARCH, HUMMINGBIRD, icon},
+        menu_bar::MenuBar,
+        tooltip::build_complex_tooltip,
+        window_header::header,
     },
 };
 use cntp_i18n::tr;
@@ -24,47 +21,33 @@ pub struct Header {
     scan_status: Entity<ScanStatus>,
     menu_bar: Option<Entity<MenuBar>>,
     services: Entity<ServicesIndicator>,
-    settings: Entity<Settings>,
 }
 
 impl Header {
     pub fn new(cx: &mut App) -> Entity<Self> {
-        let settings = cx.global::<SettingsGlobal>().model.clone();
-
-        cx.new(|cx| {
-            cx.observe(&settings, |_, _, cx| cx.notify()).detach();
-
-            Self {
-                scan_status: ScanStatus::new(cx),
-                menu_bar: if cfg!(not(target_os = "macos")) {
-                    let menus = cx.get_menus().unwrap();
-                    Some(MenuBar::new(cx, menus))
-                } else {
-                    None
-                },
-                services: ServicesIndicator::new(cx),
-                settings,
-            }
+        cx.new(|cx| Self {
+            scan_status: ScanStatus::new(cx),
+            menu_bar: if cfg!(not(target_os = "macos")) {
+                let menus = cx.get_menus().unwrap();
+                Some(MenuBar::new(cx, menus))
+            } else {
+                None
+            },
+            services: ServicesIndicator::new(cx),
         })
     }
 }
 
 impl Render for Header {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let mut header = header().main_window(true);
 
-        let swap = self.settings.read(cx).interface.should_swap_menu_and_nav();
+        if cfg!(not(target_os = "macos")) {
+            header = header.left(icon(HUMMINGBIRD).size(px(18.0)).ml(px(7.0)).mr(px(18.0)));
+        }
 
-        if swap {
-            if let Some(menu_bar) = self.menu_bar.clone() {
-                header = header.left(menu_bar);
-            }
-            header = header.left(nav_buttons());
-        } else {
-            header = header.left(nav_buttons());
-            if let Some(menu_bar) = self.menu_bar.clone() {
-                header = header.left(menu_bar);
-            }
+        if let Some(menu_bar) = self.menu_bar.clone() {
+            header = header.left(menu_bar);
         }
 
         header = header.left(self.scan_status.clone());
@@ -103,18 +86,17 @@ impl Render for ScanStatus {
         let status = self.scan_model.read(cx);
 
         div()
+            .id("scan-status")
             .flex()
             .text_sm()
             .when(
                 !matches!(
                     status,
-                    ScanEvent::ScanCompleteIdle
-                        | ScanEvent::ScanCompleteWatching
-                        | ScanEvent::TargetedRescanComplete
+                    ScanEvent::ScanCompleteIdle | ScanEvent::TargetedRescanComplete
                 ),
                 |this| {
                     this.child(
-                        div().mr(px(8.0)).pt(px(4.5)).h_full().child(
+                        div().mr(px(8.0)).pt(px(5.0)).h_full().child(
                             icon(match status {
                                 ScanEvent::Cleaning
                                 | ScanEvent::PlaylistsUpdated(_)
@@ -122,6 +104,7 @@ impl Render for ScanStatus {
                                 | ScanEvent::WaitingForMissingFolderDecision { .. } => {
                                     FOLDER_SEARCH
                                 }
+                                ScanEvent::ScanCompleteWatching => FOLDER_BOLT,
                                 _ => unreachable!(),
                             })
                             .size(px(14.0)),
@@ -129,11 +112,38 @@ impl Render for ScanStatus {
                     )
                 },
             )
+            .tooltip(build_complex_tooltip(|_, cx| {
+                let theme = cx.global::<Theme>();
+                div()
+                    .max_w(px(350.))
+                    .text_color(theme.text)
+                    .child(
+                        div()
+                            .mb(px(2.0))
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr!("SCAN_WATCHING_TOOLTIP_HEADER", "Watching for changes")),
+                    )
+                    .child(div().child(tr!(
+                        "SCAN_WATCHING_TOOLTIP_BODY",
+                        "Hummingbird is watching your files for updates and will automatically \
+                        update the library when changes are made."
+                    )))
+                    .child(
+                        div()
+                            .mt(px(2.0))
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr!(
+                                "SCAN_WATCHING_TOOLTIP_DISABLE_HINT",
+                                "You can disable this functionality in the library settings."
+                            )),
+                    )
+            }))
             .text_color(theme.text_secondary)
             .child(match status {
-                ScanEvent::ScanCompleteIdle | ScanEvent::TargetedRescanComplete => {
-                    SharedString::from("")
-                }
+                ScanEvent::ScanCompleteIdle
+                | ScanEvent::ScanCompleteWatching
+                | ScanEvent::TargetedRescanComplete => SharedString::from(""),
                 ScanEvent::ScanProgress { current, total } => {
                     if *total == u64::MAX {
                         // Total unknown (discovery still ongoing)
@@ -157,9 +167,6 @@ impl Render for ScanStatus {
                 ScanEvent::PlaylistsUpdated(_) => SharedString::from(""),
                 ScanEvent::WaitingForMissingFolderDecision { .. } => {
                     tr!("SCANNING_MISSING_DIALOG_TITLE").into()
-                }
-                ScanEvent::ScanCompleteWatching => {
-                    tr!("SCAN_COMPLETE_WATCHING", "Watching for updates").into()
                 }
             })
     }

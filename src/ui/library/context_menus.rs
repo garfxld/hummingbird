@@ -6,7 +6,7 @@ use std::{path::Path, rc::Rc, sync::Arc};
 
 use camino::Utf8PathBuf;
 use cntp_i18n::tr;
-use gpui::{AnyElement, App, AppContext, Entity, IntoElement, SharedString, Window};
+use gpui::{AnyElement, App, AppContext, Entity, IntoElement, Pixels, Point, SharedString, Window};
 
 use crate::{
     library::{
@@ -19,7 +19,7 @@ use crate::{
         queue::QueueItemData,
     },
     ui::{
-        availability::is_track_available,
+        availability::{is_track_available, snapshot},
         library::{
             ViewSwitchMessage,
             add_to_playlist::AddToPlaylist,
@@ -79,6 +79,29 @@ pub(crate) fn add_to_playlist_state(
     (state.show.clone(), state.add_to.clone())
 }
 
+/// Creates or retrieves the `AddToPlaylist` keyed state for the given album,
+/// returning the show toggle and the playlist entity.
+pub(crate) fn add_album_to_playlist_state(
+    key: &'static str,
+    album_id: i64,
+    window: &mut Window,
+    cx: &mut App,
+) -> (Entity<bool>, Entity<AddToPlaylist>) {
+    let menu_state = window.use_keyed_state((key, album_id as usize), cx, |_, cx| {
+        let show = cx.new(|_| false);
+        let tracks = cx
+            .list_tracks_in_album(album_id)
+            .expect("Failed to retrieve tracks")
+            .iter()
+            .map(|track| track.id)
+            .collect::<Vec<i64>>();
+        let add_to = AddToPlaylist::new(cx, show.clone(), tracks);
+        AddToPlaylistState { show, add_to }
+    });
+    let state = menu_state.read(cx);
+    (state.show.clone(), state.add_to.clone())
+}
+
 pub fn track_menu_for_table(
     track: &Track,
     is_available: bool,
@@ -104,12 +127,22 @@ pub fn track_menu_for_table(
     (menu, Some(add_to.into_any_element()))
 }
 
-pub fn album_menu_for_table(album: &Album, context: &AlbumContextMenuContext) -> AnyElement {
-    AlbumContextMenu::new(Rc::new(album.clone()), *context).into_any_element()
+pub fn album_menu_for_table(
+    album: &Album,
+    context: &AlbumContextMenuContext,
+    window: &mut Window,
+    cx: &mut App,
+) -> (AnyElement, Option<AnyElement>) {
+    let (show_add_to, add_to) =
+        add_album_to_playlist_state("album-menu-state", album.id, window, cx);
+    let menu =
+        AlbumContextMenu::new(Rc::new(album.clone()), show_add_to, *context).into_any_element();
+
+    (menu, Some(add_to.into_any_element()))
 }
 
 pub fn play_from_track(cx: &mut App, track: &Track, queue_items: Vec<QueueItemData>) {
-    if !is_track_available(track) {
+    if !is_track_available(cx, track) {
         return;
     }
 
@@ -134,10 +167,11 @@ pub fn play_from_track_listing(
     playlist_id: Option<i64>,
     queue_context: Option<Arc<Vec<Track>>>,
 ) {
+    let availability = snapshot(cx);
     let queue_items = if let Some(tracks) = queue_context {
         tracks
             .iter()
-            .filter(|item| is_track_available(item))
+            .filter(|item| availability.is_track_path_available(&item.location))
             .map(|item| QueueItemData::new(cx, item.location.clone(), Some(item.id), item.album_id))
             .collect()
     } else if let Some(playlist_id) = playlist_id {
@@ -147,7 +181,7 @@ pub fn play_from_track_listing(
 
         tracks
             .iter()
-            .filter(|row| Path::new(&row.location).exists())
+            .filter(|row| availability.is_track_path_available(Path::new(&row.location)))
             .map(|row| {
                 QueueItemData::new(
                     cx,
@@ -161,7 +195,7 @@ pub fn play_from_track_listing(
         cx.list_tracks_in_album(album_id)
             .expect("Failed to retrieve tracks")
             .iter()
-            .filter(|item| is_track_available(item))
+            .filter(|item| availability.is_track_path_available(&item.location))
             .map(|item| QueueItemData::new(cx, item.location.clone(), Some(item.id), item.album_id))
             .collect()
     } else {
@@ -299,16 +333,12 @@ fn queue_track(cx: &mut App, track: &Track) {
     queue_item(cx, data);
 }
 
-pub(crate) fn navigate_to_track_artist(cx: &mut App, track: &Track) {
-    let Some(album_id) = track.album_id else {
+pub(crate) fn navigate_to_track_artist(cx: &mut App, track: &Track, position: Point<Pixels>) {
+    let Ok(artists) = cx.artist_ids_for_track(track.id) else {
         return;
     };
 
-    let Ok(artist_id) = cx.artist_id_for_album(album_id) else {
-        return;
-    };
-
-    navigate_to_artist(cx, artist_id);
+    navigate_to_artists(cx, artists, position);
 }
 
 pub(crate) fn navigate_to_track_album(cx: &mut App, track: &Track) {
@@ -330,7 +360,39 @@ fn navigate_to_album(cx: &mut App, track: &Track, target_track_id: Option<i64>) 
     });
 }
 
-fn navigate_to_artist(cx: &mut App, artist_id: i64) {
+pub(crate) fn navigate_to_album_artists(cx: &mut App, album_id: i64, position: Point<Pixels>) {
+    let Ok(artists) = cx.artist_ids_for_album(album_id) else {
+        return;
+    };
+
+    navigate_to_artists(cx, artists, position);
+}
+
+pub(crate) fn navigate_to_artists(
+    cx: &mut App,
+    artists: Vec<(i64, String)>,
+    position: Point<Pixels>,
+) {
+    match artists.as_slice() {
+        [] => {}
+        [(id, _)] => navigate_to_artist(cx, *id),
+        _ => {
+            let model = cx.global::<Models>().artist_picker_model.clone();
+            model.update(cx, |m, cx| {
+                *m = Some((
+                    position,
+                    artists
+                        .into_iter()
+                        .map(|(id, name)| (id, name.into()))
+                        .collect(),
+                ));
+                cx.notify();
+            });
+        }
+    }
+}
+
+pub(crate) fn navigate_to_artist(cx: &mut App, artist_id: i64) {
     let switcher = cx.global::<Models>().switcher_model.clone();
     switcher.update(cx, |_, cx| {
         cx.emit(ViewSwitchMessage::Artist(artist_id));
@@ -338,10 +400,11 @@ fn navigate_to_artist(cx: &mut App, artist_id: i64) {
 }
 
 fn available_album_queue_items(cx: &mut App, album: &Album) -> Vec<QueueItemData> {
+    let availability = snapshot(cx);
     cx.list_tracks_in_album(album.id)
         .unwrap_or_else(|_| Arc::new(Vec::new()))
         .iter()
-        .filter(|track| is_track_available(track))
+        .filter(|track| availability.is_track_path_available(&track.location))
         .map(|track| QueueItemData::new(cx, track.location.clone(), Some(track.id), track.album_id))
         .collect()
 }

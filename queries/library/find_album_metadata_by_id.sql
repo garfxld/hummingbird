@@ -2,13 +2,13 @@ SELECT
     id,
     title,
     title_sortable,
-    artist_id,
+    NULLIF(artist_display_override, '') AS artist_display_override,
     release_date,
     date_precision,
     created_at,
     label,
     catalog_number,
     isrc,
-    vinyl_numbering
+    number_display_mode
 FROM album
 WHERE id = $1;

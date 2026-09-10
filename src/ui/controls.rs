@@ -373,8 +373,8 @@ impl Render for InfoSection {
                                         .w_full()
                                         .hover(|this| this.underline())
                                         .when_some(artist_navigation_track, |this, track| {
-                                            this.cursor_pointer().on_click(move |_, _, cx| {
-                                                navigate_to_track_artist(cx, &track);
+                                            this.cursor_pointer().on_click(move |ev, _, cx| {
+                                                navigate_to_track_artist(cx, &track, ev.position());
                                             })
                                         })
                                         .child(self.artist_name.clone().unwrap_or_else(|| {

@@ -5,7 +5,7 @@
 )]
 
 use cntp_i18n::{I18N_MANAGER, tr_load};
-use gpui::set_enabled;
+use gpui::set_trace_enabled;
 #[cfg(not(target_os = "macos"))]
 use std::path::Path;
 use std::sync::LazyLock;
@@ -44,6 +44,10 @@ const VERSION_STRING: &str = env!("HUMMINGBIRD_VERSION_STRING");
 static ALLOC_GUARD: test_support::alloc_guard::CountingAllocator =
     test_support::alloc_guard::CountingAllocator;
 
+#[cfg(all(not(test), not(feature = "heap-profileable")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -58,7 +62,7 @@ fn main() -> anyhow::Result<()> {
     windows::init()?;
 
     // disable the GPUI mini profiler immediately to avoid unnecessary allocations
-    set_enabled(false);
+    set_trace_enabled(false);
 
     I18N_MANAGER.load_source(tr_load!());
     crate::logging::init()?;

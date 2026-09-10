@@ -38,9 +38,9 @@ impl AlbumView {
                 .cloned();
 
             let handler_model = view_switch_model.clone();
-            let handler = Rc::new(move |cx: &mut App, id: &(u32, String)| {
+            let handler = Rc::new(move |cx: &mut App, id: &u32| {
                 handler_model.update(cx, |_, cx| {
-                    cx.emit(ViewSwitchMessage::Release(id.0 as i64, None))
+                    cx.emit(ViewSwitchMessage::Release(*id as i64, None))
                 })
             });
 
@@ -57,7 +57,9 @@ impl AlbumView {
             cx.observe(&state, move |_: &mut AlbumView, e, cx| {
                 let value = e.read(cx);
                 match value {
-                    ScanEvent::ScanCompleteIdle => {
+                    ScanEvent::ScanCompleteIdle
+                    | ScanEvent::ScanCompleteWatching
+                    | ScanEvent::TargetedRescanComplete => {
                         table_clone.update(cx, |_, cx| cx.emit(TableEvent::NewRows));
                     }
                     ScanEvent::ScanProgress { current, .. } if current % 100 == 0 => {

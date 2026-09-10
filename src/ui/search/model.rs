@@ -1,13 +1,15 @@
-use std::sync::Arc;
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use gpui::{App, AppContext, Context, Entity, EventEmitter, IntoElement, Render, Window};
 use nucleo::Utf32String;
+use sqlx::SqlitePool;
 use tracing::debug;
 
 use crate::{
-    library::{db::LibraryAccess, scan::ScanEvent},
+    library::{db, scan::ScanEvent},
     ui::{
-        availability::album_has_available_tracks,
+        app::Pool,
+        availability::snapshot,
         components::{input::EnrichedInputAction, palette::Palette},
         library::ViewSwitchMessage,
         models::Models,
@@ -21,14 +23,40 @@ type OnAccept = Box<dyn Fn(&Arc<SearchPaletteItem>, &mut App) + 'static>;
 
 pub struct SearchModel {
     palette: Entity<Palette<SearchPaletteItem, MatcherFunc, OnAccept>>,
+    show: Entity<bool>,
 }
 
-fn load_search_items(cx: &mut App) -> Vec<Arc<SearchPaletteItem>> {
-    let albums = match cx.list_albums_search() {
+async fn load_search_items(
+    pool: &SqlitePool,
+    availability: crate::library::availability::AvailabilitySnapshot,
+) -> Vec<Arc<SearchPaletteItem>> {
+    let paths = match db::list_album_track_paths(pool).await {
+        Ok(paths) => paths,
+        Err(e) => {
+            debug!("Failed to load album availability for search: {:?}", e);
+            Vec::new()
+        }
+    };
+
+    let availability: HashMap<i64, bool> = {
+        let mut available_albums = HashMap::new();
+
+        for (album_id, path) in paths {
+            let available = available_albums.entry(album_id).or_insert(false);
+            if !*available {
+                *available = availability.is_track_path_available(Path::new(&path));
+            }
+        }
+
+        available_albums
+    };
+
+    let albums = match db::list_albums_search(pool).await {
         Ok(album_data) => album_data
             .into_iter()
-            .map(|(id, title, artist)| {
-                (id, title, artist, album_has_available_tracks(cx, id as i64))
+            .map(|(id, title, artist_override, artists)| {
+                let available = availability.get(&id).copied().unwrap_or_default();
+                (id, title, artist_override, artists, available)
             })
             .collect(),
         Err(e) => {
@@ -37,7 +65,7 @@ fn load_search_items(cx: &mut App) -> Vec<Arc<SearchPaletteItem>> {
         }
     };
 
-    let artists = match cx.list_artists_search() {
+    let artists = match db::list_artists_search(pool).await {
         Ok(data) => data,
         Err(e) => {
             debug!("Failed to load artists for search: {:?}", e);
@@ -45,7 +73,7 @@ fn load_search_items(cx: &mut App) -> Vec<Arc<SearchPaletteItem>> {
         }
     };
 
-    let tracks = match cx.list_tracks_search() {
+    let tracks = match db::list_tracks_search(pool).await {
         Ok(data) => data,
         Err(e) => {
             debug!("Failed to load tracks for search: {:?}", e);
@@ -59,23 +87,24 @@ fn load_search_items(cx: &mut App) -> Vec<Arc<SearchPaletteItem>> {
 impl SearchModel {
     pub fn new(cx: &mut App, show: &Entity<bool>) -> Entity<SearchModel> {
         cx.new(|cx| {
-            let items = load_search_items(cx);
-
             let weak_self = cx.weak_entity();
 
             let matcher: MatcherFunc = Box::new(|item, _| match item.as_ref() {
-                SearchPaletteItem::Album { title, artist, .. } => {
-                    Utf32String::from(format!("{} {}", title, artist))
-                }
+                SearchPaletteItem::Album {
+                    title,
+                    artist,
+                    artists,
+                    ..
+                } => Utf32String::from(format!("{} {} {}", title, artist, artists)),
                 SearchPaletteItem::Artist { name, .. } => Utf32String::from(name.as_str()),
-                SearchPaletteItem::Track { title, .. } => Utf32String::from(title.as_str()),
+                SearchPaletteItem::Track { title, artists, .. } => {
+                    Utf32String::from(format!("{} {}", title, artists))
+                }
             });
 
             let on_accept: OnAccept = Box::new(move |item, cx| {
                 let event = match item.as_ref() {
-                    SearchPaletteItem::Album { id, .. } => {
-                        ViewSwitchMessage::Release(*id as i64, None)
-                    }
+                    SearchPaletteItem::Album { id, .. } => ViewSwitchMessage::Release(*id, None),
                     SearchPaletteItem::Artist { id, .. } => ViewSwitchMessage::Artist(*id),
                     SearchPaletteItem::Track { id, album_id, .. } => {
                         if let Some(album_id) = album_id {
@@ -93,35 +122,80 @@ impl SearchModel {
                 }
             });
 
-            let palette = Palette::new(cx, items, matcher, on_accept, show);
+            // items are loaded on open and dropped on close, so the palette starts empty
+            let palette = Palette::new(cx, Vec::new(), matcher, on_accept, show);
 
-            let search_model = SearchModel { palette };
+            let search_model = SearchModel {
+                palette,
+                show: show.clone(),
+            };
+
+            cx.observe(show, |this, show, cx| {
+                if *show.read(cx) {
+                    this.reload(cx);
+                } else {
+                    cx.update_entity(&this.palette, |_, cx| {
+                        cx.emit(Vec::new());
+                    });
+                }
+            })
+            .detach();
 
             let scan_status = cx.global::<Models>().scan_state.clone();
-            let palette_weak = search_model.palette.downgrade();
 
-            cx.observe(&scan_status, move |_, scan_event, cx| {
+            cx.observe(&scan_status, move |this, scan_event, cx| {
                 let state = scan_event.read(cx);
 
-                if *state == ScanEvent::ScanCompleteIdle
+                if (*state == ScanEvent::ScanCompleteIdle
                     || *state == ScanEvent::ScanCompleteWatching
-                    || *state == ScanEvent::TargetedRescanComplete
+                    || *state == ScanEvent::TargetedRescanComplete)
+                    && *this.show.read(cx)
                 {
                     debug!("Scan complete, refreshing search items");
+                    this.reload(cx);
+                }
+            })
+            .detach();
 
-                    let new_items = load_search_items(cx);
-
-                    if let Some(palette) = palette_weak.upgrade() {
-                        palette.update(cx, |_, cx| {
-                            cx.emit(new_items);
-                        });
-                    }
+            let availability = cx.global::<Models>().availability.clone();
+            cx.observe(&availability, move |this, _, cx| {
+                if *this.show.read(cx) {
+                    debug!("Storage availability changed, refreshing search items");
+                    this.reload(cx);
                 }
             })
             .detach();
 
             search_model
         })
+    }
+
+    fn reload(&self, cx: &mut Context<Self>) {
+        let pool = cx.global::<Pool>().0.clone();
+        let availability = snapshot(cx);
+
+        cx.spawn(async move |this, cx| {
+            let task =
+                crate::RUNTIME.spawn(async move { load_search_items(&pool, availability).await });
+
+            let items = match task.await {
+                Ok(items) => items,
+                Err(err) => {
+                    debug!("Search item load task failed: {:?}", err);
+                    return;
+                }
+            };
+
+            this.update(cx, |this, cx| {
+                if *this.show.read(cx) {
+                    cx.update_entity(&this.palette, |_, cx| {
+                        cx.emit(items);
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub fn reset(&mut self, cx: &mut Context<Self>) {

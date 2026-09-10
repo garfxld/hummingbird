@@ -16,6 +16,7 @@ use crate::{
         playlist::export_playlist,
         types::{Playlist, PlaylistType},
     },
+    media::numbering::NumberDisplayMode,
     playback::queue::QueueItemData,
     ui::{
         app::Pool,
@@ -32,12 +33,14 @@ use crate::{
             dropdown::dropdown,
             icons::{HEART, PLAYLIST, SORT_ASCENDING, SORT_DESCENDING, icon},
             playback_controls::playback_controls,
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
             table::table_data::TABLE_MAX_WIDTH,
             tooltip::build_tooltip,
         },
+        constants::REGULAR_BUTTON_ICON_SIZE,
         library::{
             collection_summary::format_collection_summary,
+            library_view_header::LibraryViewHeader,
             track_listing::{
                 ArtistNameVisibility,
                 track_item::{TrackItem, TrackItemLeftField},
@@ -49,6 +52,7 @@ use crate::{
     },
 };
 
+use super::detail_view_padding;
 use super::track_listing::track_item::TrackPlaylistInfo;
 
 actions!(playlist, [Export, Import]);
@@ -539,6 +543,7 @@ impl Render for PlaylistView {
             .model
             .read(cx);
         let full_width = settings.interface.effective_full_width();
+        let padding = detail_view_padding(cx);
 
         let entity = cx.entity();
         let mut sort_dropdown = dropdown("playlist-sort-dropdown")
@@ -569,33 +574,34 @@ impl Render for PlaylistView {
             })
             .flex()
             .flex_col()
-            .flex_shrink()
+            .flex_shrink(1.0)
             .overflow_x_hidden()
             .when(!full_width, |this| this.max_w(px(TABLE_MAX_WIDTH)))
             .h_full()
+            .child(LibraryViewHeader::without_title())
             .child(
                 div()
-                    .pt(px(52.0))
                     .flex()
+                    .pt(padding)
                     .overflow_x_hidden()
-                    .flex_shrink()
+                    .flex_shrink(1.0)
                     .flex_col()
                     .h_full()
                     .child(
                         div()
                             .flex()
                             .overflow_x_hidden()
-                            .flex_shrink()
-                            .px(px(18.0))
+                            .flex_shrink(1.0)
+                            .px(padding)
                             .w_full()
                             .child(
                                 div()
                                     .bg(theme.album_art_background)
                                     .shadow_sm()
-                                    .w(px(160.0))
-                                    .h(px(160.0))
+                                    .w(px(132.0))
+                                    .h(px(132.0))
                                     .flex_shrink_0()
-                                    .rounded(px(4.0))
+                                    .rounded(px(8.0))
                                     .overflow_hidden()
                                     .flex()
                                     .items_center()
@@ -611,9 +617,9 @@ impl Render for PlaylistView {
                             )
                             .child(
                                 div()
-                                    .ml(px(18.0))
+                                    .ml(px(16.0))
                                     .mt_auto()
-                                    .flex_shrink()
+                                    .flex_shrink(1.0)
                                     .flex()
                                     .flex_col()
                                     .w_full()
@@ -623,8 +629,7 @@ impl Render for PlaylistView {
                                             .font_weight(FontWeight::EXTRA_BOLD)
                                             .text_size(rems(2.5))
                                             .line_height(rems(2.75))
-                                            .overflow_x_hidden()
-                                            .pb(px(10.0))
+                                            .mb(px(11.0))
                                             .w_full()
                                             .text_ellipsis()
                                             .child(if self.playlist.is_liked_songs() {
@@ -632,13 +637,6 @@ impl Render for PlaylistView {
                                             } else {
                                                 div().child(self.playlist.name.clone())
                                             }),
-                                    )
-                                    .child(
-                                        div()
-                                            .pb(px(10.0))
-                                            .text_sm()
-                                            .text_color(theme.text_secondary)
-                                            .child(collection_summary),
                                     )
                                     .child(
                                         div()
@@ -677,12 +675,18 @@ impl Render for PlaylistView {
                                                 div()
                                                     .flex()
                                                     .gap(px(12.0))
-                                                    .items_stretch()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(theme.text_secondary)
+                                                            .child(collection_summary),
+                                                    )
                                                     .when(!is_custom_sort, |this| {
                                                         this.child(
                                                             button()
-                                                                .id("playlist-sort-direction-button")
                                                                 .size(ButtonSize::Large)
+                                                                .id("playlist-sort-direction-button")
                                                                 .on_click(cx.listener(
                                                                     |this: &mut PlaylistView, _, _, cx| {
                                                                         this.toggle_sort_order(cx);
@@ -699,7 +703,7 @@ impl Render for PlaylistView {
                                                                         },
                                                                     )
                                                                     .text_color(theme.text_secondary)
-                                                                    .size(px(20.0)),
+                                                                    .size(REGULAR_BUTTON_ICON_SIZE),
                                                                 )
                                                                 .tooltip(
                                                                     if Self::is_descending(self.sort_method)
@@ -725,7 +729,9 @@ impl Render for PlaylistView {
                             .w_full()
                             .h_full()
                             .relative()
-                            .mt(px(18.0))
+                            .mt(padding)
+                            .border_t_1()
+                            .border_color(theme.border_color)
                             .on_drag_move::<TrackDragData>(cx.listener(
                                 move |this: &mut PlaylistView,
                                       event: &DragMoveEvent<TrackDragData>,
@@ -927,6 +933,7 @@ impl Render for PlaylistView {
                                                         let track_item = TrackItem::new(
                                                             cx,
                                                             Arc::try_unwrap(track).unwrap(),
+                                                            idx,
                                                             false,
                                                             ArtistNameVisibility::Always,
                                                             TrackItemLeftField::Art,
@@ -934,7 +941,7 @@ impl Render for PlaylistView {
                                                                 id: pl_id,
                                                                 item_id: playlist_item_id,
                                                             }),
-                                                            false, // vinyl_numbering - not applicable for playlists
+                                                            NumberDisplayMode::Standard,
                                                             None, // max_track_num - not needed for Art left field
                                                             None, // queue_context - playlist uses pl_id instead
                                                             true, // show_go_to_album
@@ -967,7 +974,10 @@ impl Render for PlaylistView {
                                 .flex_col()
                                 .track_scroll(&scroll_handle),
                             )
-                            .child(floating_scrollbar("playlist", scroll_handle, RightPad::Pad)),
+                            .child(
+                                floating_scrollbar("playlist", scroll_handle)
+                                    .right(px(4.0)),
+                            ),
                     ),
             )
     }

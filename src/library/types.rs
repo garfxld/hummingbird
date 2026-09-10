@@ -9,6 +9,7 @@ use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 use sqlx::{Database, Decode, Sqlite, Type, encode::IsNull, error::BoxDynError};
 
+use crate::media::numbering::NumberDisplayMode;
 use crate::util::rgb_to_bgr;
 
 #[derive(sqlx::FromRow)]
@@ -193,7 +194,8 @@ pub struct Album {
     pub id: i64,
     pub title: DBString,
     pub title_sortable: DBString,
-    pub artist_id: i64,
+    /// Raw album artist tag, shown in place of the linked artists' names.
+    pub artist_display_override: Option<DBString>,
     #[sqlx(default)]
     pub release_date: Option<DBString>,
     #[sqlx(default)]
@@ -204,20 +206,17 @@ pub struct Album {
     pub image: Option<Box<[u8]>>,
     #[sqlx(default)]
     pub thumb: Option<Thumbnail>,
-    #[sqlx(default)]
-    pub image_mime: Option<DBString>,
     #[sqlx(skip)]
     pub tags: Option<Vec<String>>,
+    #[sqlx(skip)]
+    pub genres: Vec<DBString>,
     #[sqlx(default)]
     pub label: Option<DBString>,
     #[sqlx(default)]
     pub catalog_number: Option<DBString>,
     #[sqlx(default)]
     pub isrc: Option<DBString>,
-    #[sqlx(default)]
-    /// Whether this album uses vinyl-style track numbering (A1, A2, B1, B2, etc.)
-    /// When true, disc numbers should be displayed as "SIDE A", "SIDE B", etc.
-    pub vinyl_numbering: bool,
+    pub number_display_mode: NumberDisplayMode,
 }
 
 #[derive(sqlx::FromRow, Clone, Debug)]
@@ -230,11 +229,13 @@ pub struct Track {
     #[sqlx(default)]
     pub track_number: Option<i32>,
     #[sqlx(default)]
+    pub track_section: Option<i32>,
+    #[sqlx(default)]
     pub disc_number: Option<i32>,
     pub duration: i64,
     pub created_at: DateTime<Utc>,
     #[sqlx(skip)]
-    pub genres: Option<Vec<DBString>>,
+    pub genres: Vec<DBString>,
     #[sqlx(skip)]
     pub tags: Option<Vec<DBString>>,
     #[sqlx(try_from = "String")]
@@ -250,6 +251,11 @@ pub struct Track {
     pub rg_album_peak: Option<f64>,
     #[sqlx(default)]
     pub disc_subtitle: Option<DBString>,
+    #[sqlx(default)]
+    pub release_date: Option<DBString>,
+    #[sqlx(default)]
+    /// Date precision: 0 = year only, 1 = full date, 2 = year + month. None if no date info.
+    pub date_precision: Option<i32>,
 }
 
 #[derive(sqlx::Type, Clone, Copy, Debug, PartialEq)]

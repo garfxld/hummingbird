@@ -1,5 +1,8 @@
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use regex::Regex;
+use smallvec::SmallVec;
+
+use crate::media::numbering::{NumberDisplayMode, parse_track_number};
 
 pub fn parse_rg_float_str(value: &str) -> Option<f64> {
     value.trim().parse().ok()
@@ -24,7 +27,9 @@ pub fn parse_r128_gain_str(value: &str) -> Option<f64> {
 pub enum MetadataTag {
     Name(String),
     Artist(String),
+    Artists(String),
     AlbumArtist(String),
+    AlbumArtists(String),
     OriginalArtist(String),
     Composer(String),
     Album(String),
@@ -42,6 +47,7 @@ pub enum MetadataTag {
     Isrc(String),
     SortAlbum(String),
     ArtistSort(String),
+    AlbumArtistSort(String),
     MbidAlbum(String),
     Lyrics(String),
     ReplayGainTrackGain(String),
@@ -59,11 +65,13 @@ pub fn apply_tag(tag: MetadataTag, metadata: &mut Metadata) {
     match tag {
         MetadataTag::Name(v) => metadata.name = Some(v),
         MetadataTag::Artist(v) => metadata.artist = Some(v),
+        MetadataTag::Artists(v) => push_unique(&mut metadata.artists, v),
         MetadataTag::AlbumArtist(v) => metadata.album_artist = Some(v),
+        MetadataTag::AlbumArtists(v) => push_unique(&mut metadata.album_artist_keys, v),
         MetadataTag::OriginalArtist(v) => metadata.original_artist = Some(v),
         MetadataTag::Composer(v) => metadata.composer = Some(v),
         MetadataTag::Album(v) => metadata.album = Some(v),
-        MetadataTag::Genre(v) => metadata.genre = Some(v),
+        MetadataTag::Genre(v) => push_unique_genre(&mut metadata.genres, v),
         MetadataTag::Grouping(v) => metadata.grouping = Some(v),
         MetadataTag::Bpm(v) => metadata.bpm = Some(v),
         MetadataTag::Compilation(v) => metadata.compilation = v,
@@ -87,12 +95,15 @@ pub fn apply_tag(tag: MetadataTag, metadata: &mut Metadata) {
         MetadataTag::TrackNumber(v) => {
             if let Some(parsed) = parse_track_number(&v) {
                 metadata.track_current = Some(parsed.track);
-                metadata.vinyl_numbering = parsed.is_vinyl;
+                metadata.number_display_mode = metadata.number_display_mode.max(parsed.mode);
                 if let Some(disc) = parsed.disc {
                     metadata.disc_current = Some(disc);
                 }
                 if let Some(max) = parsed.track_max {
                     metadata.track_max = Some(max);
+                }
+                if let Some(section) = parsed.section {
+                    metadata.track_section = Some(section);
                 }
             }
         }
@@ -114,6 +125,7 @@ pub fn apply_tag(tag: MetadataTag, metadata: &mut Metadata) {
         MetadataTag::Isrc(v) => metadata.isrc = Some(v),
         MetadataTag::SortAlbum(v) => metadata.sort_album = Some(v),
         MetadataTag::ArtistSort(v) => metadata.artist_sort = Some(v),
+        MetadataTag::AlbumArtistSort(v) => metadata.album_artist_sort = Some(v),
         MetadataTag::MbidAlbum(v) => metadata.mbid_album = Some(v),
         MetadataTag::Lyrics(v) => metadata.lyrics = Some(v),
         MetadataTag::ReplayGainTrackGain(v) => {
@@ -140,17 +152,44 @@ pub fn apply_tag(tag: MetadataTag, metadata: &mut Metadata) {
     }
 }
 
+fn push_unique(values: &mut SmallVec<[String; 2]>, value: String) {
+    let value = value.trim();
+    if !value.is_empty() && !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
+}
+
+fn push_unique_genre(values: &mut SmallVec<[String; 2]>, value: String) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+
+    let normalized = value.to_lowercase();
+    if !values
+        .iter()
+        .any(|existing| existing.to_lowercase() == normalized)
+    {
+        values.push(value.to_string());
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Metadata {
     pub name: Option<String>,
     pub artist: Option<String>,
+    pub artists: SmallVec<[String; 2]>,
     pub album_artist: Option<String>,
+    /// Album artist claim parts: TSO2 split on "&" when every part claims a credited track artist,
+    /// the individual ALBUMARTISTS credits, otherwise the raw TPE2 values.
+    pub album_artist_keys: SmallVec<[String; 2]>,
     pub artist_sort: Option<String>,
+    pub album_artist_sort: Option<String>,
     pub original_artist: Option<String>,
     pub composer: Option<String>,
     pub album: Option<String>,
     pub sort_album: Option<String>,
-    pub genre: Option<String>,
+    pub genres: SmallVec<[String; 2]>,
     pub grouping: Option<String>,
     pub bpm: Option<u64>,
     pub compilation: bool,
@@ -168,7 +207,8 @@ pub struct Metadata {
     pub disc_current: Option<u64>,
     pub disc_max: Option<u64>,
     pub disc_subtitle: Option<String>,
-    pub vinyl_numbering: bool,
+    pub track_section: Option<u64>,
+    pub number_display_mode: NumberDisplayMode,
 
     pub label: Option<String>,
     pub catalog: Option<String>,
@@ -276,50 +316,6 @@ pub fn parse_release_date(value: &str) -> Option<ParsedReleaseDate> {
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
-pub struct ParsedTrackNumber {
-    pub disc: Option<u64>,
-    pub track: u64,
-    pub track_max: Option<u64>,
-    pub is_vinyl: bool,
-}
-
-pub fn parse_track_number(value: &str) -> Option<ParsedTrackNumber> {
-    let id3_position_in_set_regex = Regex::new(r"(\d+)/(\d+)").unwrap();
-    let vinyl_track_regex = Regex::new(r"(?i)^([A-Z])(\d*)$").unwrap();
-    let mut parsed = ParsedTrackNumber::default();
-
-    // check for vinyl style numbers
-    if let Some(captures) = vinyl_track_regex.captures(value) {
-        if let Some(side) = captures.get(1) {
-            let side_char = side.as_str().to_uppercase().chars().next().unwrap();
-            let side_num = (side_char as u64) - ('A' as u64) + 1;
-            parsed.disc = Some(side_num);
-            parsed.is_vinyl = true;
-        }
-        if let Some(track) = captures.get(2)
-            && !track.is_empty()
-        {
-            parsed.track = track.as_str().parse().ok().unwrap_or(1);
-        } else {
-            parsed.track = 1;
-        }
-        Some(parsed)
-    // check for MP3-style numbers
-    } else if let Some(captures) = id3_position_in_set_regex.captures(value) {
-        if let Some(track) = captures.get(1) {
-            parsed.track = track.as_str().parse().ok().unwrap_or(1);
-        }
-        if let Some(total) = captures.get(2) {
-            parsed.track_max = total.as_str().parse().ok();
-        }
-        Some(parsed)
-    } else {
-        parsed.track = value.parse().ok()?;
-        Some(parsed)
-    }
-}
-
-#[derive(Default, Debug, PartialEq, Eq)]
 pub struct ParsedDiscNumber {
     pub disc: u64,
     pub disc_max: Option<u64>,
@@ -357,8 +353,22 @@ pub fn parse_disc_number(value: &str) -> Option<ParsedDiscNumber> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParsedReleaseDate, parse_release_date};
+    use super::{Metadata, MetadataTag, ParsedReleaseDate, apply_tag, parse_release_date};
     use chrono::{NaiveTime, TimeZone, Timelike, Utc};
+
+    #[test]
+    fn genres_are_trimmed_and_deduplicated_case_insensitively() {
+        let mut metadata = Metadata::default();
+
+        for genre in [" Rock ", "rock", "", "Dream Pop", "DREAM POP", "Rock/Pop"] {
+            apply_tag(MetadataTag::Genre(genre.to_string()), &mut metadata);
+        }
+
+        assert_eq!(
+            metadata.genres.as_slice(),
+            ["Rock", "Dream Pop", "Rock/Pop"]
+        );
+    }
 
     #[test]
     fn parses_year_only_release_dates() {
@@ -406,68 +416,6 @@ mod tests {
         );
         assert_eq!(date.time(), NaiveTime::MIN);
         assert_eq!(date.time().nanosecond(), 0);
-    }
-
-    fn track_number_parses(
-        value: &str,
-        e_disc: Option<u64>,
-        e_track: u64,
-        e_track_max: Option<u64>,
-        e_is_vinyl: bool,
-    ) {
-        assert_eq!(
-            super::parse_track_number(value),
-            Some(super::ParsedTrackNumber {
-                disc: e_disc,
-                track: e_track,
-                track_max: e_track_max,
-                is_vinyl: e_is_vinyl,
-            })
-        );
-    }
-
-    #[test]
-    fn parse_track_number_rejects_invalid_numbers() {
-        assert_eq!(super::parse_track_number("Intro"), None);
-        assert_eq!(super::parse_track_number("Side A"), None);
-        assert_eq!(super::parse_track_number(""), None);
-    }
-
-    #[test]
-    fn parse_track_number_parses_vinyl_numbers() {
-        track_number_parses("A0", Some(1), 0, None, true);
-        track_number_parses("A1", Some(1), 1, None, true);
-        track_number_parses("A2", Some(1), 2, None, true);
-        track_number_parses("A3", Some(1), 3, None, true);
-        track_number_parses("B1", Some(2), 1, None, true);
-        track_number_parses("B2", Some(2), 2, None, true);
-        track_number_parses("B3", Some(2), 3, None, true);
-        track_number_parses("Z999", Some(26), 999, None, true);
-    }
-
-    #[test]
-    fn parse_track_number_parses_vinyl_disc_only() {
-        track_number_parses("A", Some(1), 1, None, true);
-        track_number_parses("B", Some(2), 1, None, true);
-        track_number_parses("Z", Some(26), 1, None, true);
-    }
-
-    #[test]
-    fn parse_track_number_parses_id3_set() {
-        track_number_parses("0/1", None, 0, Some(1), false);
-        track_number_parses("1/12", None, 1, Some(12), false);
-        track_number_parses("2/12", None, 2, Some(12), false);
-        track_number_parses("3/12", None, 3, Some(12), false);
-        track_number_parses("9999/9999", None, 9999, Some(9999), false);
-    }
-
-    #[test]
-    fn parse_track_number_parses_normal() {
-        track_number_parses("0", None, 0, None, false);
-        track_number_parses("1", None, 1, None, false);
-        track_number_parses("2", None, 2, None, false);
-        track_number_parses("3", None, 3, None, false);
-        track_number_parses("9999", None, 9999, None, false);
     }
 
     fn disc_number_parses(

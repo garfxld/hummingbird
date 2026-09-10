@@ -1,5 +1,5 @@
-//! Path comparisons that respect filesystem case sensitivity, probed per volume. Folded paths are
-//! comparison keys only — never use them for I/O or storage.
+//! Case sensitivity checks and path folding for comparisons.
+//! Folded paths are for comparison only - never use them for I/O or storage.
 
 use std::{
     borrow::Cow,
@@ -9,14 +9,12 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 use rustc_hash::FxHashMap;
 
-/// Fallback for volumes that can't be probed (e.g. offline).
 const OS_DEFAULT_CASE_INSENSITIVE: bool = cfg!(any(windows, target_os = "macos"));
 
 static CASE_CACHE: LazyLock<RwLock<FxHashMap<Utf8PathBuf, bool>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
-/// Whether the volume containing `path` is case-insensitive. Probed once per volume and cached;
-/// falls back to the OS default when the volume can't be identified or probed (e.g. offline).
+/// Whether the filesystem for `path` is case-insensitive. Probed once per volume, OS default if unknown.
 pub fn is_case_insensitive(path: &Utf8Path) -> bool {
     let Some(key) = volume_key(path) else {
         return OS_DEFAULT_CASE_INSENSITIVE;
@@ -29,14 +27,13 @@ pub fn is_case_insensitive(path: &Utf8Path) -> bool {
         return OS_DEFAULT_CASE_INSENSITIVE;
     };
 
-    // The path and its parent are both gone: the volume is probably offline and a higher ancestor
-    // may belong to a different volume — don't probe.
+    // if the path and its parent are missing, don't probe some ancestor we never checked
     if anchor != path && path.parent().is_none_or(|p| p != anchor) {
         return OS_DEFAULT_CASE_INSENSITIVE;
     }
 
     let Some(result) = probe_case_insensitive(&anchor) else {
-        return OS_DEFAULT_CASE_INSENSITIVE; // inconclusive — don't cache
+        return OS_DEFAULT_CASE_INSENSITIVE; // inconclusive - don't cache
     };
     CASE_CACHE
         .write()
@@ -45,7 +42,6 @@ pub fn is_case_insensitive(path: &Utf8Path) -> bool {
     result
 }
 
-/// The directory to probe for `path` (`path` itself or its nearest existing ancestor).
 fn nearest_existing_dir(path: &Utf8Path) -> Option<Utf8PathBuf> {
     let mut current = Some(path);
     while let Some(p) = current {
@@ -57,8 +53,7 @@ fn nearest_existing_dir(path: &Utf8Path) -> Option<Utf8PathBuf> {
     None
 }
 
-/// Cache key grouping paths by the volume they live on: the drive/UNC prefix on Windows, the
-/// filesystem's device id on Unix.
+/// Windows volume key: drive letter or UNC share.
 #[cfg(windows)]
 fn volume_key(path: &Utf8Path) -> Option<Utf8PathBuf> {
     let stripped = strip_verbatim(path.as_str());
@@ -76,9 +71,7 @@ fn volume_key(path: &Utf8Path) -> Option<Utf8PathBuf> {
     Some(Utf8PathBuf::from(stripped.into_owned().to_lowercase()))
 }
 
-/// The Unix cache key is the device id of `path`'s filesystem: always current, unlike a mount
-/// list snapshot, which goes stale for volumes mounted after first use. `None` when the path
-/// doesn't resolve — its volume can't be determined.
+/// Unix volume key: device id of `path`'s filesystem. `None` if stat fails.
 #[cfg(unix)]
 fn volume_key(path: &Utf8Path) -> Option<Utf8PathBuf> {
     use std::os::unix::fs::MetadataExt;
@@ -86,15 +79,13 @@ fn volume_key(path: &Utf8Path) -> Option<Utf8PathBuf> {
     Some(Utf8PathBuf::from(dev.to_string()))
 }
 
-/// Empirically determine whether `dir`'s filesystem is case-insensitive by resolving an existing
-/// entry under a differently-cased spelling, or by creating a probe file when no cased entries
-/// exist. `None` when inconclusive (e.g. an empty read-only directory).
+/// Check whether `dir`'s filesystem is case-insensitive - look for a flipped-case entry, or create a temp file.
 fn probe_case_insensitive(dir: &Utf8Path) -> Option<bool> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             let swapped = swap_case(&name);
-            // no ASCII letters to flip — this entry can't probe casing
+            // no ASCII letters to flip - can't probe with this name
             if swapped == name {
                 continue;
             }
@@ -120,9 +111,7 @@ fn temp_file_probe(dir: &Utf8Path) -> Option<bool> {
     result.ok()
 }
 
-/// Flip ASCII letter case only: every case-insensitive filesystem folds ASCII identically, while
-/// full Unicode mappings (ß -> SS, İ -> i̇) don't match what NTFS/APFS actually fold, so a name
-/// like "Straße" probed under its Unicode swap wrongly reports NotFound.
+/// Swap ASCII letter case only. Unicode case folds can change length and won't match the filesystem.
 fn swap_case(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -133,11 +122,7 @@ fn swap_case(s: &str) -> String {
         .collect()
 }
 
-/// Strip Windows verbatim prefixes (`\\?\C:\x` -> `C:\x`, `\\?\UNC\srv\sh` -> `\\srv\sh`) so
-/// canonicalized and user-configured spellings compare equal.
-///
-/// We use this to check casing. Do not use this for anything else - it may result in errors for
-/// long paths.
+/// Strip the Windows \\?\ prefix so canonical and configured paths match. Comparison only.
 fn strip_verbatim(path: &str) -> Cow<'_, str> {
     if !cfg!(windows) {
         return Cow::Borrowed(path);
@@ -151,8 +136,20 @@ fn strip_verbatim(path: &str) -> Cow<'_, str> {
     }
 }
 
-/// Normalize a path into a comparison key: verbatim prefix stripped, and
-/// case-folded on case-insensitive volumes.
+/// Case-insensitive prefix check without calling [`fold_path`] (avoids a Unix stat).
+pub fn starts_with_folded(key: &Utf8Path, folded_prefix: &Utf8Path) -> bool {
+    let key = strip_verbatim(key.as_str()).to_lowercase();
+    let mut key_chars = key.chars();
+    for expected in folded_prefix.as_str().chars() {
+        if key_chars.next() != Some(expected) {
+            return false;
+        }
+    }
+    // prefix must end on a path component boundary
+    key_chars.next().is_none_or(|c| c == '/' || c == '\\')
+}
+
+/// Build a comparison key - strip \\?\ and fold case on case-insensitive volumes.
 pub fn fold_path(path: &Utf8Path) -> Utf8PathBuf {
     let normalized = strip_verbatim(path.as_str());
     if is_case_insensitive(path) {
@@ -162,13 +159,11 @@ pub fn fold_path(path: &Utf8Path) -> Utf8PathBuf {
     }
 }
 
-/// Whether two paths name the same file under the volume's case rules.
 pub fn paths_equal(a: &Utf8Path, b: &Utf8Path) -> bool {
     a == b || fold_path(a) == fold_path(b)
 }
 
-/// Whether two paths resolve to the same file on disk (same device and file id). False when
-/// either path can't be stat'ed — callers must treat that as "not the same file".
+/// Whether two paths are the same file (same device and inode). False if either can't be stat'ed.
 pub fn same_file(a: &Utf8Path, b: &Utf8Path) -> bool {
     same_file::is_same_file(a.as_std_path(), b.as_std_path()).unwrap_or(false)
 }
@@ -252,6 +247,49 @@ mod tests {
     }
 
     #[test]
+    fn starts_with_folded_matches_on_component_boundaries_only() {
+        let prefix = Utf8Path::new("/music/artist");
+        assert!(starts_with_folded(
+            Utf8Path::new("/Music/Artist/album/track.flac"),
+            prefix
+        ));
+        assert!(starts_with_folded(Utf8Path::new("/music/artist"), prefix));
+        assert!(!starts_with_folded(
+            Utf8Path::new("/Music/Artist2/track.flac"),
+            prefix
+        ));
+        assert!(!starts_with_folded(
+            Utf8Path::new("/music-other/track.flac"),
+            Utf8Path::new("/music")
+        ));
+        assert!(!starts_with_folded(Utf8Path::new("/music"), prefix));
+    }
+
+    #[test]
+    fn starts_with_folded_folds_unicode_like_fold_path() {
+        let prefix = Utf8Path::new("/müsik/straße");
+        assert!(starts_with_folded(
+            Utf8Path::new("/MÜSIK/STRAßE/track.flac"),
+            prefix
+        ));
+        assert!(!starts_with_folded(
+            Utf8Path::new("/MUSIK/STRASSE/track.flac"),
+            prefix
+        ));
+    }
+
+    #[test]
+    fn starts_with_folded_folds_final_sigma_like_fold_path() {
+        // str::to_lowercase maps word-final Σ to ς, char::to_lowercase does not
+        let prefix = "/music/AΣ".to_lowercase();
+        assert_eq!(prefix, "/music/aς");
+        assert!(starts_with_folded(
+            Utf8Path::new("/music/AΣ/track.flac"),
+            Utf8Path::new(&prefix)
+        ));
+    }
+
+    #[test]
     fn folded_paths_prefix_match_case_variant_roots() {
         let dir = TestDir::new("fs-case-test");
         if !is_case_insensitive(&dir.utf8_path()) {
@@ -260,12 +298,5 @@ mod tests {
         let root = fold_path(&dir.utf8_path());
         let variant = Utf8PathBuf::from(dir.utf8_path().as_str().to_uppercase()).join("track.flac");
         assert!(fold_path(&variant).starts_with(&root));
-    }
-
-    #[test]
-    fn folded_paths_do_not_match_sibling_prefix() {
-        let root = fold_path(Utf8Path::new("/music"));
-        let other = fold_path(Utf8Path::new("/music-other/track.flac"));
-        assert!(!other.starts_with(&root));
     }
 }

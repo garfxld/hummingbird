@@ -29,7 +29,7 @@ use crate::{
             files_view::{FilesView, FlatRow, TrackRef, file_context_menu::FileContextMenu},
         },
         models::{
-            HasLikedState, LIKED_SONGS_PLAYLIST_ID, PlaybackInfo, subscribe_liked_updates,
+            HasLikedState, LIKED_SONGS_PLAYLIST_ID, Models, PlaybackInfo, subscribe_liked_updates,
             toggle_like_by_id,
         },
         theme::Theme,
@@ -72,7 +72,13 @@ impl FileRowItem {
                 this.flat_row.track.as_ref().map(|t| t.id)
             });
 
-            let is_file_available = is_track_path_available(&flat_row.path);
+            let availability = cx.global::<Models>().availability.clone();
+            let is_file_available = is_track_path_available(cx, &flat_row.path);
+            cx.observe(&availability, |this: &mut FileRowItem, _, cx| {
+                this.is_file_available = is_track_path_available(cx, &this.flat_row.path);
+                cx.notify();
+            })
+            .detach();
 
             if flat_row.is_audio {
                 let current_track = cx.global::<PlaybackInfo>().current_track.clone();
@@ -225,7 +231,7 @@ impl FileRowItem {
 fn batch_queue_items(cx: &mut App, items: &[(PathBuf, Option<TrackRef>)]) -> Vec<QueueItemData> {
     let mut data = Vec::with_capacity(items.len());
     for (path, track) in items {
-        if is_track_path_available(path) {
+        if is_track_path_available(cx, path) {
             data.push(QueueItemData::new(
                 cx,
                 path.clone(),
@@ -272,16 +278,17 @@ impl Render for FileRowItem {
 
         let theme = cx.global::<Theme>();
         let bg = if is_selected {
-            theme.queue_item_selected
+            theme.list_item_selected
         } else if is_current {
-            theme.queue_item_current
+            theme.list_item_current
         } else {
-            theme.queue_item
+            theme.list_item
         };
         let text_color = theme.text;
         let guide_color = theme.border_color;
         let icon_color = theme.text_secondary;
-        let hover_bg = theme.queue_item_hover;
+        let hover_bg = theme.list_item_hover;
+        let active_bg = theme.list_item_active;
 
         let two_column = cx
             .global::<SettingsGlobal>()
@@ -328,7 +335,7 @@ impl Render for FileRowItem {
                     is_liked,
                     TrackContextMenuContext {
                         show_go_to_album: track.album_id.is_some(),
-                        show_go_to_artist: track.album_id.is_some(),
+                        show_go_to_artist: true,
                         play_from_here: Some(play_from_here),
                     },
                     None,
@@ -363,6 +370,7 @@ impl Render for FileRowItem {
             .bg(bg)
             .cursor_pointer()
             .hover(|s| s.bg(hover_bg))
+            .active(|s| s.bg(active_bg))
             .children((0..depth).map(|_| {
                 div()
                     .flex_shrink_0()
@@ -436,7 +444,7 @@ impl Render for FileRowItem {
             )
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .text_ellipsis()
                     .overflow_hidden()
                     .text_color(text_color)

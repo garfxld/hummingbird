@@ -11,6 +11,7 @@ use super::{
 use crate::ui::{
     components::context::context,
     components::drag_drop::{AlbumDragData, DragPreview, TrackDragData},
+    models::Models,
     theme::Theme,
 };
 
@@ -21,6 +22,7 @@ where
     C: Column + 'static,
 {
     context_menu_context: T::ContextMenuContext,
+    index: usize,
     data: Option<Vec<Option<SharedString>>>,
     columns: Arc<IndexMap<C, f32, FxBuildHasher>>,
     on_select: Option<OnSelectHandler<T, C>>,
@@ -38,6 +40,7 @@ where
     pub fn new(
         cx: &mut App,
         id: T::Identifier,
+        index: usize,
         columns: &Entity<Arc<IndexMap<C, f32, FxBuildHasher>>>,
         on_select: Option<OnSelectHandler<T, C>>,
         context_menu_context: T::ContextMenuContext,
@@ -56,6 +59,7 @@ where
 
         let image_path = row.as_ref().and_then(|row| row.get_image_path());
         let is_available = row.as_ref().is_some_and(|row| row.is_available(cx));
+        let availability = cx.global::<Models>().availability.clone();
         cx.new(|cx| {
             cx.observe(columns, |this: &mut TableItem<T, C>, m, cx| {
                 this.columns = m.read(cx).clone();
@@ -69,9 +73,15 @@ where
                 cx.notify();
             })
             .detach();
+            cx.observe(&availability, |this: &mut TableItem<T, C>, _, cx| {
+                this.is_available = this.row.as_ref().is_some_and(|row| row.is_available(cx));
+                cx.notify();
+            })
+            .detach();
 
             Self {
                 context_menu_context,
+                index,
                 data,
                 image_path,
                 columns: columns_read,
@@ -89,13 +99,13 @@ where
     T: TableData<C> + 'static,
     C: Column + 'static,
 {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let row_data = self.row.clone();
         let is_available = self.is_available;
-        let context_menu = self.row.as_ref().and_then(|row| {
-            row.get_context_menu(window, cx, &self.context_menu_context, GridContext::Table)
-        });
+        let menu_context = self.context_menu_context.clone();
+        let menu_rows = row_data.clone();
         let theme = cx.global::<Theme>();
+        let menu_bg = theme.elevated_background;
         let drag_data = if is_available {
             self.row.as_ref().and_then(|row| row.get_drag_data())
         } else {
@@ -105,7 +115,11 @@ where
         let mut row = div()
             .w_full()
             .flex()
-            .id(self.id.clone().unwrap_or("bad".into()))
+            .id(self.id.clone().unwrap_or(self.index.into()))
+            .bg(theme.list_item)
+            .when(self.index % 2 == 1, |this| {
+                this.bg(theme.list_item_alternate)
+            })
             .when_some(self.on_select.clone(), {
                 let row_data = row_data.clone();
                 move |div, on_select| {
@@ -115,8 +129,8 @@ where
                             on_select(cx, &id)
                         })
                         .cursor_pointer()
-                        .hover(|this| this.bg(theme.nav_button_hover))
-                        .active(|this| this.bg(theme.nav_button_active))
+                        .hover(|this| this.bg(theme.list_item_hover))
+                        .active(|this| this.bg(theme.list_item_active))
                     } else {
                         div.cursor_default().opacity(0.5)
                     }
@@ -160,12 +174,10 @@ where
                     .w(px(TABLE_IMAGE_COLUMN_WIDTH))
                     .h(px(36.0))
                     .text_sm()
-                    .pl(px(11.0))
+                    .pl(px(9.0))
                     .flex_shrink_0()
                     .text_ellipsis()
                     //.border_r_1()
-                    .border_color(theme.border_color)
-                    .border_b_1()
                     .border_color(theme.border_color)
                     .flex()
                     .child(
@@ -192,37 +204,42 @@ where
                     .expect("data references column outside of viewed table");
                 let is_last = i == column_count - 1;
                 let base_width = *col.1;
-                let monospace = T::column_monospace(*col.0);
                 row = row.child(
                     div()
                         .when(!is_last, |this| this.w(px(base_width)))
-                        .when(is_last, |this| this.flex_grow().min_w(px(base_width)))
+                        .when(is_last, |this| this.flex_grow(1.0).min_w(px(base_width)))
                         .h(px(36.0))
                         .px(px(12.0))
                         .py(px(6.0))
-                        .when(!T::has_images() && i == 0, |div| div.pl(px(17.0)))
-                        .when(monospace, |div| div.font_family("Roboto Mono"))
+                        .when(T::has_images() && i == 0, |div| div.pl(px(8.0)))
+                        .when(!col.0.is_primary(), |div| {
+                            div.text_color(theme.text_secondary)
+                        })
                         .text_sm()
                         .flex_shrink_0()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .border_b_1()
                         .border_color(theme.border_color)
                         .when_some(column_data.clone(), |div, string| div.child(string)),
                 );
             }
         }
 
-        if let Some((menu, overlay)) = context_menu {
-            let ctx = context(self.id.clone().unwrap_or("bad-context".into()))
-                .with(row)
-                .child(div().bg(theme.elevated_background).child(menu));
-            match overlay {
-                Some(overlay) => div().w_full().child(ctx).child(overlay).into_any_element(),
-                None => ctx.into_any_element(),
-            }
-        } else {
-            row.into_any_element()
-        }
+        context(self.id.clone().unwrap_or(self.index.into()))
+            .with(row)
+            .menu_on_open(move |window, cx| match menu_rows.as_ref() {
+                Some(row) => {
+                    match row.get_context_menu(window, cx, &menu_context, GridContext::Table) {
+                        Some((menu, overlay)) => div()
+                            .bg(menu_bg)
+                            .child(menu)
+                            .when_some(overlay, |this, overlay| this.child(overlay))
+                            .into_any_element(),
+                        None => div().into_any_element(),
+                    }
+                }
+                None => div().into_any_element(),
+            })
+            .into_any_element()
     }
 }

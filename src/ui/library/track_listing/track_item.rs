@@ -16,6 +16,7 @@ use crate::ui::models::{
 use crate::ui::util::format_duration;
 
 use crate::library::{db::LibraryAccess, types::Track};
+use crate::media::numbering::NumberDisplayMode;
 use crate::ui::{
     availability::is_track_available,
     components::context::context,
@@ -37,7 +38,7 @@ pub struct TrackItem {
     left_field: TrackItemLeftField,
     album_art: Option<SharedString>,
     pl_info: Option<TrackPlaylistInfo>,
-    vinyl_numbering: bool,
+    number_display_mode: NumberDisplayMode,
     max_track_num_str: Option<SharedString>,
     is_available: bool,
     queue_context: Option<Arc<Vec<Track>>>,
@@ -80,7 +81,7 @@ impl TrackItem {
         anv: ArtistNameVisibility,
         left_field: TrackItemLeftField,
         pl_info: Option<TrackPlaylistInfo>,
-        vinyl_numbering: bool,
+        number_display_mode: NumberDisplayMode,
         max_track_num_str: Option<SharedString>,
         queue_context: Option<Arc<Vec<Track>>>,
         show_go_to_album: bool,
@@ -105,7 +106,7 @@ impl TrackItem {
                 artist_name_visibility: anv,
                 left_field,
                 pl_info,
-                vinyl_numbering,
+                number_display_mode,
                 max_track_num_str,
                 queue_context,
                 show_go_to_album,
@@ -200,7 +201,7 @@ impl Render for TrackItem {
                                         .pb(px(6.0))
                                         .text_ellipsis()
                                         .when_some(self.track.disc_number, |this, num| {
-                                            if self.vinyl_numbering {
+                                            if self.number_display_mode != NumberDisplayMode::Standard {
                                                 let side = (b'A' + (num - 1) as u8) as char;
                                                 let side = side.to_string(); // TODO: fix this upstream
                                                 this.child(tr!(

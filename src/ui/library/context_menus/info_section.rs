@@ -6,7 +6,7 @@ use gpui::{Entity, IntoElement, RenderOnce, Window};
 
 use crate::ui::components::icons::{HEART, HEART_FILLED};
 use crate::{
-    library::types::Track,
+    library::{db::LibraryAccess, types::Track},
     ui::{
         availability::is_track_path_available,
         components::{
@@ -45,23 +45,25 @@ impl InfoSectionContextMenu {
 }
 
 impl RenderOnce for InfoSectionContextMenu {
-    fn render(self, _window: &mut Window, _cx: &mut gpui::App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let reveal_path = self.current_path;
         let can_reveal_track = reveal_path
             .as_ref()
-            .is_some_and(|path| is_track_path_available(path.as_path()));
+            .is_some_and(|path| is_track_path_available(cx, path.as_path()));
         let track = self.track;
 
         menu()
             .when_some(track.clone(), |menu, track_for_artist| {
-                let can_go_to_artist = track_for_artist.album_id.is_some();
+                let can_go_to_artist = cx
+                    .artist_ids_for_track(track_for_artist.id)
+                    .is_ok_and(|ids| !ids.is_empty());
                 menu.item(
                     menu_item(
                         "info_section_go_to_artist",
                         Some(USERS),
                         tr!("GO_TO_ARTIST"),
-                        move |_, _, cx| {
-                            navigate_to_track_artist(cx, &track_for_artist);
+                        move |ev, _, cx| {
+                            navigate_to_track_artist(cx, &track_for_artist, ev.position());
                         },
                     )
                     .disabled(!can_go_to_artist),

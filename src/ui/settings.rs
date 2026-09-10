@@ -15,8 +15,8 @@ use cntp_i18n::tr;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
     Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, TitlebarOptions,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle, WindowKind,
-    WindowOptions, div, prelude::FluentBuilder, px,
+    Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions, div,
+    prelude::FluentBuilder, px,
 };
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
     ui::{
         components::{
             icons::{ACCESS_POINT, ADJUSTMENTS, BOOKS, PLAY, WORLD},
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
             sidebar::{sidebar, sidebar_item},
             window_chrome::window_chrome,
             window_header::header,
@@ -71,22 +71,24 @@ fn open_or_focus_settings_window(cx: &mut App, section: Option<SettingsSectionKi
     let section = section.unwrap_or(SettingsSectionKind::Interface);
     let bounds = WindowBounds::Windowed(gpui::Bounds::centered(
         None,
-        gpui::size(px(900.0), px(600.0)),
+        gpui::size(px(1024.0), px(700.0)),
         cx,
     ));
+
+    let window_background = cx.global::<Theme>().window_background;
 
     cx.open_window(
         WindowOptions {
             window_bounds: Some(bounds),
-            window_background: WindowBackgroundAppearance::Opaque,
+            window_background,
             window_decorations: Some(WindowDecorations::Client),
             window_min_size: Some(gpui::size(px(640.0), px(420.0))),
             titlebar: Some(TitlebarOptions {
                 title: Some(SharedString::from(tr!("SETTINGS", "Settings"))),
                 appears_transparent: true,
                 traffic_light_position: Some(gpui::Point {
-                    x: px(12.0),
-                    y: px(11.0),
+                    x: px(14.0),
+                    y: px(14.0),
                 }),
             }),
             kind: WindowKind::Normal,
@@ -285,6 +287,7 @@ impl Render for SettingsWindow {
         }
 
         let theme = cx.global::<Theme>();
+        let background_primary = theme.background_primary;
         let active = &self.active;
         let scroll_handle = self.scroll_handle.clone();
         let scrollbar_always_visible = {
@@ -295,7 +298,7 @@ impl Render for SettingsWindow {
             // we want to always draw padding to prevent a noticeable jitter.
             settings.model.read(cx).interface.always_show_scrollbars
                 && (scroll_handle.total_content_height() <= 0.0
-                    || scroll_handle.should_draw_scrollbar())
+                    || scroll_handle.should_draw_vertical_scrollbar())
         };
 
         let content = active.element();
@@ -312,7 +315,7 @@ impl Render for SettingsWindow {
                 .w_full()
                 .overflow_y_scroll()
                 .track_scroll(&scroll_handle)
-                .flex_shrink()
+                .flex_shrink(1.0)
                 .overflow_x_hidden()
                 .child(
                     div()
@@ -331,10 +334,9 @@ impl Render for SettingsWindow {
             .h_full()
             .pt(px(8.0))
             .pb(px(8.0))
-            .pl(px(8.0))
-            .pr(px(7.0))
-            .border_r_1()
-            .border_color(theme.border_color)
+            .px(px(8.0))
+            .rounded(crate::ui::constants::PANEL_ROUNDING)
+            .bg(background_primary)
             .overflow_hidden()
             .flex()
             .flex_col()
@@ -358,27 +360,30 @@ impl Render for SettingsWindow {
                 .child(header())
                 .child(
                     div()
+                        .mt(px(6.0))
                         .flex()
                         .flex_row()
-                        .flex_shrink()
-                        .flex_grow()
+                        .flex_shrink(1.0)
+                        .flex_grow(1.0)
                         .min_h(px(0.0))
+                        .gap(crate::ui::constants::PANEL_GAP)
                         .child(sidebar)
                         .child(
                             div()
                                 .relative()
                                 .flex()
-                                .flex_grow()
-                                .flex_shrink()
+                                .flex_grow(1.0)
+                                .flex_shrink(1.0)
                                 .min_h(px(0.0))
                                 .overflow_hidden()
+                                .rounded(crate::ui::constants::PANEL_ROUNDING)
+                                .bg(background_primary)
                                 .child(body)
                                 .when(!fills_height, |this| {
-                                    this.child(floating_scrollbar(
-                                        "settings-scrollbar",
-                                        scroll_handle,
-                                        RightPad::Pad,
-                                    ))
+                                    this.child(
+                                        floating_scrollbar("settings-scrollbar", scroll_handle)
+                                            .right(px(4.0)),
+                                    )
                                 }),
                         ),
                 ),

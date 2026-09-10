@@ -37,6 +37,7 @@ use crate::{
             label::label,
             section_header::section_header,
         },
+        constants::REGULAR_BUTTON_ICON_SIZE,
         theme::Theme,
     },
 };
@@ -179,7 +180,7 @@ impl Render for LibrarySettings {
                     )
                     .child(
                         div()
-                            .flex_grow()
+                            .flex_grow(1.0)
                             .overflow_hidden()
                             .text_ellipsis()
                             .text_sm()
@@ -227,7 +228,7 @@ impl Render for LibrarySettings {
                             div()
                                 .flex()
                                 .gap(px(6.0))
-                                .child(icon(CIRCLE_PLUS).my_auto().size(px(14.0)))
+                                .child(icon(CIRCLE_PLUS).my_auto().size(REGULAR_BUTTON_ICON_SIZE))
                                 .child(tr!("SCANNING_ADD_FOLDERS", "Add Folders")),
                         )
                         .id("library-settings-add-folder")
@@ -274,6 +275,31 @@ impl Render for LibrarySettings {
                                 cx.notify();
                             });
                         })
+                }),
+            )
+            .child(
+                label(
+                    "watch-for-changes",
+                    tr!("SCANNING_WATCH_CHANGES", "Watch for Changes"),
+                )
+                .subtext(tr!(
+                    "SCANNING_WATCH_CHANGES_SUBTEXT",
+                    "Automatically update your library when files change on disk."
+                ))
+                .w_full()
+                .child(checkbox(
+                    "watch-for-changes-checkbox",
+                    scanning.watch_for_changes,
+                ))
+                .on_click({
+                    let settings_c = self.settings.clone();
+                    move |_, _, cx| {
+                        settings_c.update(cx, |s, cx| {
+                            s.scanning.watch_for_changes = !s.scanning.watch_for_changes;
+                            save_settings(cx, s);
+                            cx.notify();
+                        });
+                    }
                 }),
             )
             .child(

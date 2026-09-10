@@ -12,6 +12,7 @@ use crate::ui::{
         drag_drop::{AlbumDragData, DragPreview, TrackDragData},
         managed_image::{ManagedImageKey, managed_image},
     },
+    models::Models,
     theme::Theme,
 };
 
@@ -30,6 +31,7 @@ where
     secondary_text: Option<SharedString>,
     on_select: Option<OnSelectHandler<T, C>>,
     is_available: bool,
+    image_target: Option<Pixels>,
 }
 
 impl<T, C> GridItem<T, C>
@@ -51,18 +53,35 @@ where
         let is_available = row.is_available(cx);
         let grid_content = row.get_grid_content_for(cx, context);
         let (primary_text, secondary_text) = grid_content.unwrap_or(("".into(), None));
+        let availability = cx.global::<Models>().availability.clone();
 
-        Some(cx.new(|_| Self {
-            context_menu_context,
-            grid_context: context,
-            row,
-            id: element_id,
-            image_key,
-            primary_text,
-            secondary_text,
-            on_select,
-            is_available,
+        Some(cx.new(|cx| {
+            cx.observe(&availability, |this: &mut GridItem<T, C>, _, cx| {
+                this.is_available = this.row.is_available(cx);
+                cx.notify();
+            })
+            .detach();
+
+            Self {
+                context_menu_context,
+                grid_context: context,
+                row,
+                id: element_id,
+                image_key,
+                primary_text,
+                secondary_text,
+                on_select,
+                is_available,
+                image_target: None,
+            }
         }))
+    }
+
+    pub fn set_image_target(&mut self, target: Pixels, cx: &mut Context<Self>) {
+        if self.image_target != Some(target) {
+            self.image_target = Some(target);
+            cx.notify();
+        }
     }
 }
 
@@ -71,13 +90,14 @@ where
     T: TableData<C> + 'static,
     C: Column + 'static,
 {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let row_data = self.row.clone();
         let is_available = self.is_available;
-        let context_menu =
-            self.row
-                .get_context_menu(window, cx, &self.context_menu_context, self.grid_context);
+        // Menus are built only when one opens; see TableItem::render for why this matters.
+        let menu_context = self.context_menu_context.clone();
         let theme = cx.global::<Theme>();
+        let menu_bg = theme.elevated_background;
+        let grid_context = self.grid_context;
 
         let drag_data = if is_available {
             self.row.get_drag_data()
@@ -148,15 +168,17 @@ where
             .bg(theme.album_art_background)
             .overflow_hidden();
 
-        if let Some(image) = self.image_key.clone() {
-            img_container = img_container.child(
-                managed_image((self.id.clone(), "grid_image"), image)
-                    .w_full()
-                    .h_full()
-                    .aspect_square()
-                    .rounded(px(6.0))
-                    .object_fit(ObjectFit::Fill),
-            );
+        if let Some(key) = self.image_key.clone() {
+            let mut image = managed_image((self.id.clone(), "grid_image"), key)
+                .w_full()
+                .h_full()
+                .aspect_square()
+                .rounded(px(6.0))
+                .object_fit(ObjectFit::Fill);
+            if let Some(target) = self.image_target {
+                image = image.target_logical_px(target.into());
+            }
+            img_container = img_container.child(image);
         }
 
         let content = container
@@ -184,22 +206,20 @@ where
                 )
             });
 
-        if let Some((menu, overlay)) = context_menu {
-            let ctx = context(self.id.clone())
-                .w_full()
-                .h_full()
-                .with(content)
-                .child(div().bg(theme.elevated_background).child(menu));
-            match overlay {
-                Some(overlay) => div()
-                    .size_full()
-                    .child(ctx)
-                    .child(overlay)
-                    .into_any_element(),
-                None => ctx.into_any_element(),
-            }
-        } else {
-            content.into_any_element()
-        }
+        context(self.id.clone())
+            .w_full()
+            .h_full()
+            .with(content)
+            .menu_on_open(move |window, cx| {
+                match row_data.get_context_menu(window, cx, &menu_context, grid_context) {
+                    Some((menu, overlay)) => div()
+                        .bg(menu_bg)
+                        .child(menu)
+                        .when_some(overlay, |this, overlay| this.child(overlay))
+                        .into_any_element(),
+                    None => div().into_any_element(),
+                }
+            })
+            .into_any_element()
     }
 }

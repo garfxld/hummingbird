@@ -8,11 +8,20 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
-use rustc_hash::{FxHashMap, FxHashSet};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::{
-    library::{db, scan::database::update_metadata},
+    library::{
+        db,
+        scan::{
+            artist_match::ArtistMatcher,
+            database::{
+                WriteCaches, flush_album_artists, flush_album_genres, flush_track_artists,
+                update_metadata,
+            },
+            decode::FileArt,
+        },
+    },
     media::{
         builtin::{lofty, symphonia},
         lookup_table,
@@ -94,7 +103,9 @@ impl TestDir {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{id}", *RUN_ID));
         fs::create_dir_all(&path).unwrap();
-        Self { path }
+        Self {
+            path: path.canonicalize().unwrap(),
+        }
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -155,19 +166,21 @@ pub(crate) async fn insert_metadata(
     metadata: &Metadata,
     path: &Utf8Path,
 ) -> anyhow::Result<()> {
+    let mut matcher = ArtistMatcher::new();
+    let mut caches = WriteCaches::default();
     update_metadata(
         conn,
         metadata,
         path,
         100,
-        &None,
+        &FileArt::default(),
         false,
-        &mut FxHashSet::default(),
-        &mut FxHashMap::default(),
-        &mut FxHashMap::default(),
-        &mut FxHashMap::default(),
+        &mut caches,
     )
     .await?;
+    flush_album_artists(conn, &mut matcher, &mut caches.pending_albums).await?;
+    flush_track_artists(conn, &mut matcher, &mut caches.pending_tracks).await?;
+    flush_album_genres(conn, &mut caches.pending_genre_albums).await?;
     Ok(())
 }
 

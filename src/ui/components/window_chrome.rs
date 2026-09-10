@@ -137,12 +137,7 @@ impl RenderOnce for WindowChrome {
                             .when(!tiling.right, |div| div.border_r(border_size))
                             .when(!tiling.is_tiled(), |div| {
                                 div.shadow(vec![gpui::BoxShadow {
-                                    color: Hsla {
-                                        h: 0.,
-                                        s: 0.,
-                                        l: 0.,
-                                        a: 0.4,
-                                    },
+                                    color: Hsla::new(0., 0., 0., 0.4),
                                     blur_radius: shadow_size / 2.,
                                     spread_radius: px(0.),
                                     offset: point(px(0.0), px(0.0)),
@@ -154,12 +149,13 @@ impl RenderOnce for WindowChrome {
                         cx.stop_propagation();
                     })
                     .overflow_hidden()
-                    .bg(theme.background_primary)
+                    .bg(theme.frame_background)
                     .size_full()
                     .flex()
                     .flex_col()
                     .max_w_full()
                     .max_h_full()
+                    .p(px(6.0))
                     .child(self.content),
             );
 

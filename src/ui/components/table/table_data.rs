@@ -23,12 +23,12 @@ pub struct ColumnReorderDrag {
 
 // table layout constants
 pub const TABLE_MAX_WIDTH: f32 = 1000.0;
-pub const TABLE_IMAGE_COLUMN_WIDTH: f32 = 47.0;
+pub const TABLE_IMAGE_COLUMN_WIDTH: f32 = 43.0;
+pub const TABLE_HEADER_HEIGHT: f32 = 30.0;
 
 // column resize constants
 pub const COLUMN_MIN_WIDTH: f32 = 50.0;
 pub const COLUMN_RESIZE_HANDLE_WIDTH: f32 = 6.0;
-pub const TABLE_HEADER_GROUP: &str = "table-header-group";
 
 pub trait Column: Clone + Copy + Debug + Hash + PartialEq + Eq {
     /// Retrieves the friendly name text of the column.
@@ -47,9 +47,12 @@ pub trait Column: Clone + Copy + Debug + Hash + PartialEq + Eq {
         true
     }
 
-    /// Returns all possible column variants for this type.
-    /// Required for building the column visibility menu.
-    fn all_columns() -> &'static [Self];
+    /// Returns whether or not this is the primary identifying column of a table (eg. the title of
+    /// an album).
+    /// Defaults to false.
+    fn is_primary(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -105,14 +108,13 @@ where
     /// Retrieves the full-quality key for the row, for use with `managed_image`.
     fn get_full_image_key(&self) -> Option<ManagedImageKey>;
 
-    /// Retrieves the default column widths for the table.
-    fn default_columns() -> IndexMap<C, f32, FxBuildHasher>;
+    /// Retrieves every column supported by the table in its natural order and width.
+    fn available_columns() -> IndexMap<C, f32, FxBuildHasher>;
 
-    /// Returns a boolean indicating whether or not a given column should be displayed using a
-    /// monospaced font.
-    ///
-    /// This should be true for columns that contain mostly numbers, like a date or time.
-    fn column_monospace(column: C) -> bool;
+    /// Retrieves the columns visible when the table has no saved settings.
+    fn default_columns() -> IndexMap<C, f32, FxBuildHasher> {
+        Self::available_columns()
+    }
 
     /// Retrieves a unique element id for the row. This is different from the row id, as it is
     /// used to identify the row in GPUI.
@@ -170,5 +172,10 @@ where
         _context: GridContext,
     ) -> Option<(SharedString, Option<SharedString>)> {
         self.get_grid_content(cx)
+    }
+
+    /// Retrieves the default sort order for the table.
+    fn default_sort() -> Option<TableSort<C>> {
+        None
     }
 }

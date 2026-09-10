@@ -305,11 +305,11 @@ impl Render for QueueItem {
                         // .border_color(theme.border_color)
                         .when(item_state.is_being_dragged, |div| div.opacity(0.5))
                         .when(is_selected && !item_state.is_being_dragged, |div| {
-                            div.bg(theme.queue_item_selected)
+                            div.bg(theme.list_item_selected)
                         })
                         .when(
                             !is_selected && is_current && !item_state.is_being_dragged,
-                            |div| div.bg(theme.queue_item_current),
+                            |div| div.bg(theme.list_item_current),
                         )
                         .when(is_available, |div| {
                             div.on_click(move |event: &ClickEvent, _, cx| {
@@ -341,15 +341,15 @@ impl Render for QueueItem {
                         .when(
                             is_available && !is_selected && !item_state.is_being_dragged,
                             |div| {
-                                div.hover(|div| div.bg(theme.queue_item_hover))
-                                    .active(|div| div.bg(theme.queue_item_active))
+                                div.hover(|div| div.bg(theme.list_item_hover))
+                                    .active(|div| div.bg(theme.list_item_active))
                             },
                         )
                         .when(
                             is_available && is_selected && !item_state.is_being_dragged,
                             |div| {
-                                div.hover(|div| div.bg(theme.queue_item_selected))
-                                    .active(|div| div.bg(theme.queue_item_active))
+                                div.hover(|div| div.bg(theme.list_item_selected))
+                                    .active(|div| div.bg(theme.list_item_active))
                             },
                         )
                         .when(is_available, |div| {

@@ -228,11 +228,15 @@ fn apply_settings_outcome(
 
     let next_health = match outcome {
         SettingsLoadOutcome::Loaded(settings) => {
-            // deliver external edits to the playback thread, save_settings pushes on its own and
-            // its reload diff is empty
+            // deliver external edits to the playback thread and the scanner, save_settings
+            // pushes on its own and its reload diff is empty
             if current.playback != settings.playback && cx.has_global::<PlaybackInterface>() {
                 cx.global::<PlaybackInterface>()
                     .update_settings(settings.playback.clone());
+            }
+            if current.scanning != settings.scanning && cx.has_global::<ScanInterface>() {
+                cx.global::<ScanInterface>()
+                    .update_settings(settings.scanning.clone());
             }
             *current = settings;
             cx.notify();
@@ -375,6 +379,7 @@ mod tests {
                 "interface": {
                     "theme": "custom.json",
                     "full_width_library": true,
+                    "always_show_forward_button": true,
                     "reduced_motion": true,
                     "always_show_scrollbars": true
                 },
@@ -396,6 +401,7 @@ mod tests {
         assert!(!settings.playback.keep_current_on_queue_clear);
         assert_eq!(settings.interface.theme.as_deref(), Some("custom.json"));
         assert!(settings.interface.full_width_library);
+        assert!(settings.interface.always_show_forward_button);
         assert!(settings.interface.reduced_motion);
         assert!(settings.interface.always_show_scrollbars);
         assert_eq!(

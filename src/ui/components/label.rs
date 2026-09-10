@@ -54,21 +54,20 @@ impl RenderOnce for Label {
             .id(self.id)
             .flex()
             .overflow_hidden()
-            .text_sm()
             .gap(px(6.0))
             .child(
                 div()
                     .flex()
                     .overflow_hidden()
                     .w_full()
-                    .flex_shrink()
+                    .flex_shrink(1.0)
                     .flex_col()
-                    .my_auto()
-                    .child(div().overflow_hidden().child(self.text))
+                    .child(div().overflow_hidden().text_size(px(15.0)).child(self.text))
                     .when_some(self.subtext, |this, that| {
                         this.child(
                             div()
                                 .overflow_hidden()
+                                .text_sm()
                                 .text_color(theme.text_secondary)
                                 .child(that),
                         )

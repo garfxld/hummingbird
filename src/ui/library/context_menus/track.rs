@@ -6,7 +6,7 @@ use gpui::{Entity, IntoElement, RenderOnce, SharedString, Window};
 
 use crate::ui::components::icons::{HEART, HEART_FILLED};
 use crate::{
-    library::types::Track,
+    library::{db::LibraryAccess, types::Track},
     ui::{
         availability::is_track_path_available,
         components::{
@@ -65,9 +65,12 @@ impl RenderOnce for TrackContextMenu {
         let track_for_album = self.track.clone();
         let track_for_reveal = self.track.clone();
         let track_for_rescan = self.track.clone();
-        let can_go_to_artist = track_for_artist.album_id.is_some();
+        let can_go_to_artist = self.context.show_go_to_artist
+            && cx
+                .artist_ids_for_track(track_for_artist.id)
+                .is_ok_and(|ids| !ids.is_empty());
         let can_go_to_album = track_for_album.album_id.is_some();
-        let can_reveal_track = is_track_path_available(track_for_reveal.location.as_path());
+        let can_reveal_track = is_track_path_available(cx, track_for_reveal.location.as_path());
         let show_add_to = self.show_add_to;
         let play_from_here = self.context.play_from_here.clone();
         let playlist_info = self.playlist_info;
@@ -123,8 +126,8 @@ impl RenderOnce for TrackContextMenu {
                         "track_go_to_artist",
                         Some(USERS),
                         tr!("GO_TO_ARTIST"),
-                        move |_, _, cx| {
-                            navigate_to_track_artist(cx, &track_for_artist);
+                        move |ev, _, cx| {
+                            navigate_to_track_artist(cx, &track_for_artist, ev.position());
                         },
                     )
                     .disabled(!can_go_to_artist),

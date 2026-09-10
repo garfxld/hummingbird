@@ -9,8 +9,9 @@ use crate::{
     ui::{
         components::{
             icons::{MICROPHONE, icon},
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
         },
+        constants::PANEL_ROUNDING,
         models::{CurrentTrack, Models, PlaybackInfo},
         scroll_follow::{SmoothScrollFollow, ease_out_cubic},
         theme::Theme,
@@ -145,7 +146,6 @@ impl Lyrics {
 
 impl Render for Lyrics {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.global::<Theme>();
         let queue = cx.global::<Models>().queue_width.read(cx).as_f32();
         let playback_state = *self.playback_state.read(cx);
         let reduced_motion = cx
@@ -155,8 +155,10 @@ impl Render for Lyrics {
             .interface
             .reduced_motion;
 
-        let muted = theme.text_secondary;
-        let normal = theme.text;
+        let (muted, normal, background_primary) = {
+            let theme = cx.global::<Theme>();
+            (theme.text_secondary, theme.text, theme.background_primary)
+        };
 
         if reduced_motion {
             if self.follow_pending || self.scroll_follow.is_active() || self.needs_animation_frame()
@@ -211,7 +213,7 @@ impl Render for Lyrics {
                         .cursor_pointer()
                         .max_w(px(width))
                         .overflow_x_hidden()
-                        .px(px(20.0))
+                        .px(px(14.0))
                         .py(px(lerp(
                             LYRICS_BASE_VERTICAL_PADDING,
                             LYRICS_ACTIVE_VERTICAL_PADDING,
@@ -259,7 +261,7 @@ impl Render for Lyrics {
                         .id("lyrics-scroll")
                         .h_full()
                         .w_full()
-                        .py(px(9.0))
+                        .py(px(5.0))
                         .flex()
                         .flex_col()
                         .overflow_y_scroll()
@@ -270,8 +272,8 @@ impl Render for Lyrics {
                     floating_scrollbar(
                         "lyrics-scrollbar",
                         ScrollableHandle::Regular(scroll_handle),
-                        RightPad::Pad,
                     )
+                    .right(px(4.0))
                     .on_interaction(move |_, cx| {
                         if let Some(lyrics) = lyrics.upgrade() {
                             lyrics.update(cx, |this, cx| {
@@ -297,23 +299,33 @@ impl Render for Lyrics {
                         .w_full()
                         .overflow_y_scroll()
                         .track_scroll(&scroll_handle)
-                        .px(px(16.0))
-                        .py(px(14.0))
+                        .px(px(14.0))
+                        .py(px(12.0))
                         .text_size(px(20.0))
                         .line_height(rems(1.6))
                         .font_weight(FontWeight::BOLD)
                         .text_color(normal)
                         .child(SharedString::from(text)),
                 )
-                .child(floating_scrollbar(
-                    "lyrics-plain-scrollbar",
-                    ScrollableHandle::Regular(scroll_handle),
-                    RightPad::Pad,
-                ))
+                .child(
+                    floating_scrollbar(
+                        "lyrics-plain-scrollbar",
+                        ScrollableHandle::Regular(scroll_handle),
+                    )
+                    .right(px(4.0)),
+                )
                 .into_any_element()
         };
 
-        div().h_full().w_full().flex().flex_col().child(inner)
+        div()
+            .h_full()
+            .w_full()
+            .overflow_hidden()
+            .rounded(PANEL_ROUNDING)
+            .bg(background_primary)
+            .flex()
+            .flex_col()
+            .child(inner)
     }
 }
 
@@ -536,10 +548,10 @@ fn lerp(start: f32, end: f32, progress: f32) -> f32 {
 }
 
 fn lerp_color(start: Rgba, end: Rgba, progress: f32) -> Rgba {
-    Rgba {
-        r: lerp(start.r, end.r, progress),
-        g: lerp(start.g, end.g, progress),
-        b: lerp(start.b, end.b, progress),
-        a: lerp(start.a, end.a, progress),
-    }
+    Rgba::new(
+        lerp(start.red, end.red, progress),
+        lerp(start.green, end.green, progress),
+        lerp(start.blue, end.blue, progress),
+        lerp(start.alpha, end.alpha, progress),
+    )
 }

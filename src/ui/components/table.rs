@@ -17,9 +17,10 @@ use crate::{
         components::{
             context::context,
             drag_drop::DragPreview,
-            icons::{CHEVRON_DOWN, CHEVRON_UP, icon},
+            icons::{CHEVRON_DOWN, CHEVRON_UP, SELECTOR, icon},
             menu::{menu, menu_check_item},
-            scrollbar::{RightPad, floating_scrollbar},
+            scrollbar::{ScrollbarAxis, floating_scrollbar},
+            table::table_data::TABLE_HEADER_HEIGHT,
             uniform_grid::uniform_grid,
         },
         models::Models,
@@ -32,8 +33,7 @@ use gpui::{prelude::FluentBuilder, *};
 use indexmap::IndexMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use table_data::{
-    Column, ColumnReorderDrag, GridContext, TABLE_HEADER_GROUP, TABLE_IMAGE_COLUMN_WIDTH,
-    TableData, TableSort,
+    Column, ColumnReorderDrag, GridContext, TABLE_IMAGE_COLUMN_WIDTH, TableData, TableSort,
 };
 use table_item::TableItem;
 
@@ -66,14 +66,14 @@ where
     render_counter: Entity<usize>,
 
     grid_views: Entity<FxHashMap<usize, Entity<grid_item::GridItem<T, C>>>>,
-    grid_render_counter: Entity<usize>,
     view_mode: Entity<TableViewMode>,
     grid_scroll_handle: UniformListScrollHandle,
 
     items: Option<Arc<Vec<T::Identifier>>>,
     sort_method: Entity<Option<TableSort<C>>>,
     on_select: Option<OnSelectHandler<T, C>>,
-    scroll_handle: UniformListScrollHandle,
+    list_vertical_scroll_handle: UniformListScrollHandle,
+    list_horizontal_scroll_handle: ScrollHandle,
 }
 
 pub enum TableEvent {
@@ -109,7 +109,6 @@ where
             let render_counter = cx.new(|_| 0);
 
             let grid_views = cx.new(|_| FxHashMap::default());
-            let grid_render_counter = cx.new(|_| 0);
             let initial_view_mode = match initial_settings.map(|s| s.view_mode) {
                 Some(TableViewModeSetting::Grid) => TableViewMode::Grid,
                 _ => TableViewMode::List,
@@ -117,11 +116,12 @@ where
             let view_mode = cx.new(|_| initial_view_mode);
             let grid_scroll_handle = UniformListScrollHandle::new();
 
-            let sort_method = cx.new(|_| None);
-            let scroll_handle = UniformListScrollHandle::new();
+            let sort_method = cx.new(|_| T::default_sort());
+            let list_vertical_scroll_handle = UniformListScrollHandle::new();
+            let list_horizontal_scroll_handle = ScrollHandle::new();
 
             if let Some(offset) = initial_scroll_offset {
-                scroll_handle
+                list_vertical_scroll_handle
                     .0
                     .borrow()
                     .base_handle
@@ -149,7 +149,6 @@ where
                 this.views = cx.new(|_| FxHashMap::default());
                 this.render_counter = cx.new(|_| 0);
                 this.grid_views = cx.new(|_| FxHashMap::default());
-                this.grid_render_counter = cx.new(|_| 0);
                 this.items = items;
 
                 cx.notify();
@@ -160,7 +159,6 @@ where
                 this.views = cx.new(|_| FxHashMap::default());
                 this.render_counter = cx.new(|_| 0);
                 this.grid_views = cx.new(|_| FxHashMap::default());
-                this.grid_render_counter = cx.new(|_| 0);
 
                 let settings = this.get_settings(cx);
                 let table_settings_model = cx.global::<Models>().table_settings.clone();
@@ -191,7 +189,6 @@ where
                     this.views = cx.new(|_| FxHashMap::default());
                     this.render_counter = cx.new(|_| 0);
                     this.grid_views = cx.new(|_| FxHashMap::default());
-                    this.grid_render_counter = cx.new(|_| 0);
                     this.items = items;
 
                     cx.notify();
@@ -206,20 +203,25 @@ where
                 views,
                 render_counter,
                 grid_views,
-                grid_render_counter,
                 view_mode,
                 grid_scroll_handle,
                 items,
                 sort_method,
                 on_select,
-                scroll_handle,
+                list_vertical_scroll_handle,
+                list_horizontal_scroll_handle,
             }
         })
     }
 
     pub fn get_scroll_offset(&self, cx: &App) -> f32 {
         let offset = match *self.view_mode.read(cx) {
-            TableViewMode::List => self.scroll_handle.0.borrow().base_handle.offset(),
+            TableViewMode::List => self
+                .list_vertical_scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .offset(),
             TableViewMode::Grid => self.grid_scroll_handle.0.borrow().base_handle.offset(),
         };
         (-offset.y).into()
@@ -230,14 +232,21 @@ where
     }
 
     pub fn set_view_mode(&mut self, view_mode: TableViewMode, cx: &mut App) {
+        if view_mode == TableViewMode::List && self.get_view_mode(cx) == TableViewMode::Grid {
+            // Grid items own keyed image state. Drop them when leaving the grid instead of
+            // retaining the last viewport until the table itself is destroyed.
+            self.grid_views.update(cx, |views, _| views.clear());
+        }
+
         self.view_mode.update(cx, |mode, cx| {
             *mode = view_mode;
             cx.notify();
         });
     }
 
-    pub fn get_items(&self) -> Option<Arc<Vec<T::Identifier>>> {
-        self.items.clone()
+    /// The current sort selection (if there is one).
+    pub fn get_sort(&self, cx: &App) -> Option<TableSort<C>> {
+        *self.sort_method.read(cx)
     }
 
     pub fn toggle_column(&mut self, column: C, cx: &mut App) {
@@ -270,17 +279,17 @@ where
 
     pub fn show_column(&mut self, column: C, cx: &mut App) {
         // use the previous col widths if available
-        let default_columns = T::default_columns();
+        let available_columns = T::available_columns();
         let width = self
             .hidden_column_widths
             .read(cx)
             .get(&column)
             .copied()
-            .or_else(|| default_columns.get(&column).copied())
+            .or_else(|| available_columns.get(&column).copied())
             .unwrap_or(100.0);
 
-        // insert based on default column positions
-        let default_order: Vec<C> = default_columns.keys().copied().collect();
+        // insert based on the natural available-column order
+        let default_order: Vec<C> = available_columns.keys().copied().collect();
         let target_idx = default_order.iter().position(|c| *c == column).unwrap_or(0);
 
         self.columns.update(cx, |cols, cx| {
@@ -308,6 +317,7 @@ where
     fn build_columns_from_settings(
         settings: Option<&TableSettings>,
     ) -> (IndexMap<C, f32, FxBuildHasher>, FxHashMap<C, f32>) {
+        let available_columns = T::available_columns();
         let default_columns = T::default_columns();
 
         let Some(settings) = settings else {
@@ -338,7 +348,7 @@ where
         let mut hidden_widths = FxHashMap::default();
 
         for name in column_order {
-            if let Some((&col, &default_width)) = default_columns
+            if let Some((&col, &default_width)) = available_columns
                 .iter()
                 .find(|(c, _)| c.get_column_name() == name.as_str())
             {
@@ -351,7 +361,7 @@ where
             }
         }
 
-        for (&col, &default_width) in &default_columns {
+        for (&col, &default_width) in &available_columns {
             if visible_columns.contains_key(&col) {
                 continue;
             }
@@ -433,7 +443,7 @@ where
         let render_counter = self.render_counter.clone();
 
         let grid_views_model = self.grid_views.clone();
-        let grid_render_counter = self.grid_render_counter.clone();
+        let grid_views_to_prune = self.grid_views.clone();
         let view_mode = *self.view_mode.read(cx);
         let grid_scroll_handle = self.grid_scroll_handle.clone();
         let grid_min_item_width = {
@@ -442,34 +452,42 @@ where
         };
 
         let columns = self.columns.clone();
-        let context_menu_context = self.context_menu_context.clone();
-        let handler = self.on_select.clone();
-        let scroll_handle = self.scroll_handle.clone();
+        let list_context_menu_context = self.context_menu_context.clone();
+        let grid_context_menu_context = self.context_menu_context.clone();
+        let list_handler = self.on_select.clone();
+        let grid_handler = self.on_select.clone();
+        let list_vertical_scroll_handle = self.list_vertical_scroll_handle.clone();
+        let list_horizontal_scroll_handle = self.list_horizontal_scroll_handle.clone();
 
         let columns_read = self.columns.read(cx);
         let column_count = columns_read.len();
-        let default_columns = T::default_columns();
+        let available_columns = T::available_columns();
+
+        let table_min_width = columns_read.values().sum::<f32>()
+            + if T::has_images() {
+                TABLE_IMAGE_COLUMN_WIDTH
+            } else {
+                0.0
+            };
 
         let mut header = div()
             .w_full()
             .flex()
             .id("table-header-inner")
-            .group(SharedString::from(TABLE_HEADER_GROUP));
+            .border_b_1()
+            .border_color(theme.border_color);
 
         if T::has_images() {
             header = header.child(
                 div()
                     .w(px(TABLE_IMAGE_COLUMN_WIDTH))
-                    .h(px(36.0))
+                    .h(px(TABLE_HEADER_HEIGHT))
                     .pl(px(18.0))
                     .pr(px(10.0))
                     .py(px(2.0))
                     .text_sm()
                     .flex_shrink_0()
-                    .text_ellipsis()
-                    .border_color(theme.border_color)
-                    .border_b_1()
-                    .border_color(theme.border_color),
+                    .text_ellipsis(),
             );
         }
 
@@ -479,48 +497,57 @@ where
             let is_last = i == column_count - 1;
             let base_width = *column.1;
             let column_id = *column.0;
-            let default_width = default_columns
+            let default_width = available_columns
                 .get(&column_id)
                 .copied()
                 .unwrap_or(base_width);
+
+            // if the column is the current sort column, use its sort order for the arrow
+            let sort_ascending_if_this_col = if let Some(method) = sort_method.as_ref() {
+                if method.column == *column.0 {
+                    Some(method.ascending)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             header = header.child(
                 div()
                     .overflow_hidden()
                     .flex()
                     .when(!is_last, |this| this.w(px(base_width)))
-                    .when(is_last, |this| this.flex_grow().min_w(px(base_width)))
-                    .h(px(36.0))
-                    .px(px(12.0))
-                    .py(px(6.0))
-                    .when(!T::has_images() && i == 0, |div| div.pl(px(18.0)))
+                    .when(is_last, |this| this.flex_grow(1.0).min_w(px(base_width)))
+                    .h(px(TABLE_HEADER_HEIGHT))
+                    .pl(px(12.0))
+                    .pr(px(8.0))
+                    .items_center()
+                    .when(T::has_images() && i == 0, |div| div.pl(px(8.0)))
                     .text_sm()
                     .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(theme.border_color)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(
                         div()
-                            .flex_shrink()
+                            .flex_shrink(1.0)
                             .overflow_hidden()
                             .text_ellipsis()
                             .child(column_id.get_column_name()),
                     )
-                    .when_some(sort_method.as_ref(), |this, method| {
-                        this.when(method.column == column_id, |this| {
-                            this.child(
-                                icon(if method.ascending {
-                                    CHEVRON_UP
-                                } else {
-                                    CHEVRON_DOWN
-                                })
-                                .size(px(14.0))
-                                .ml(px(4.0))
-                                .flex_shrink_0()
-                                .my_auto(),
-                            )
+                    .child(
+                        icon(match sort_ascending_if_this_col {
+                            Some(true) => CHEVRON_UP,
+                            Some(false) => CHEVRON_DOWN,
+                            None => SELECTOR,
                         })
-                    })
+                        .when(!sort_ascending_if_this_col.is_some(), |this| {
+                            this.text_color(theme.text_disabled)
+                        })
+                        .size(px(14.0))
+                        .ml_auto()
+                        .flex_shrink_0()
+                        .my_auto(),
+                    )
                     .id(i)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.sort_method.update(cx, move |this, cx| {
@@ -559,9 +586,8 @@ where
             }
         }
 
-        let all_columns = C::all_columns();
         let mut column_menu = menu();
-        for col in all_columns {
+        for col in available_columns.keys() {
             let is_visible = columns_read.contains_key(col);
             let is_hideable = col.is_hideable();
             let column_copy = *col;
@@ -583,133 +609,176 @@ where
             .with(header)
             .child(div().bg(theme.elevated_background).child(column_menu));
 
+        let list_canvas = div()
+            .image_cache(hummingbird_cache((T::get_table_name(), 0_usize), 200))
+            .relative()
+            .min_w(px(table_min_width))
+            .w_full()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(header_with_context)
+            .when_some(items.clone(), |this, items| {
+                let items_len = items.len();
+                this.child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .h_full()
+                        .flex_grow(1.0)
+                        .min_h(px(0.0))
+                        .child({
+                            let mut list =
+                                uniform_list("table-list", items_len, move |range, _, cx| {
+                                    let start = range.start;
+                                    let is_templ_render = range.start == 0 && range.end == 1;
+
+                                    items[range]
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(idx, item)| {
+                                            let idx = idx + start;
+
+                                            if !is_templ_render {
+                                                prune_views(&views_model, &render_counter, idx, cx);
+                                            }
+
+                                            div()
+                                                .w_full()
+                                                .child(create_or_retrieve_view(
+                                                    &views_model,
+                                                    idx,
+                                                    |cx| {
+                                                        TableItem::new(
+                                                            cx,
+                                                            item.clone(),
+                                                            idx,
+                                                            &columns,
+                                                            list_handler.clone(),
+                                                            list_context_menu_context.clone(),
+                                                        )
+                                                    },
+                                                    cx,
+                                                ))
+                                                .into_any_element()
+                                        })
+                                        .collect()
+                                })
+                                .track_scroll(&list_vertical_scroll_handle)
+                                .w_full()
+                                .h_full();
+                            // GPUI otherwise maps a horizontal gesture onto this list's only
+                            // scrollable axis (Y). Keep X scrolling on the outer viewport.
+                            list.style().restrict_scroll_to_axis = Some(true);
+                            list
+                        }),
+                )
+            });
+
+        let grid_canvas = {
+            let gap = 0.0;
+            let grid_padding = 4.0;
+
+            div()
+                .relative()
+                .w_full()
+                .flex()
+                .h_full()
+                .px(px(grid_padding))
+                .overflow_y_hidden()
+                .when_some(items.clone(), |this, items| {
+                    let items_len = items.len();
+                    this.child(
+                        uniform_grid(
+                            "grid-list",
+                            items_len,
+                            grid_scroll_handle.clone(),
+                            move |idx, item_width, _, cx| {
+                                let item_id = items[idx].clone();
+
+                                let view = create_or_retrieve_view(
+                                    &grid_views_model,
+                                    idx,
+                                    |cx| {
+                                        grid_item::GridItem::new(
+                                            cx,
+                                            item_id,
+                                            grid_handler.clone(),
+                                            grid_context_menu_context.clone(),
+                                            GridContext::Table,
+                                        )
+                                        .unwrap()
+                                    },
+                                    cx,
+                                );
+
+                                view.update(cx, |item, cx| {
+                                    item.set_image_target(item_width, cx);
+                                });
+
+                                div()
+                                    .image_cache(hummingbird_cache(
+                                        (T::get_table_name(), idx + 1),
+                                        1,
+                                    ))
+                                    .size_full()
+                                    .child(view)
+                                    .into_any_element()
+                            },
+                        )
+                        .min_item_width(px(grid_min_item_width))
+                        .gap(px(gap))
+                        .on_visible_range(move |range, _, cx| {
+                            grid_views_to_prune.update(cx, |views, _| {
+                                views.retain(|idx, _| range.contains(idx));
+                            });
+                        })
+                        .py(px(grid_padding)),
+                    )
+                    .child(floating_scrollbar("grid-scrollbar", grid_scroll_handle).right(px(4.0)))
+                })
+        };
+
         div()
             .id(T::get_table_name())
-            .overflow_x_scroll()
-            .overflow_y_hidden()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .w_full()
             .h_full()
-            .when(view_mode == TableViewMode::List, |this| {
-                this.child(header_with_context)
+            .child(match view_mode {
+                TableViewMode::List => {
+                    let mut horizontal_viewport = div()
+                        .id(format!("{}-horizontal-scroll", T::get_table_name()))
+                        .overflow_x_scroll()
+                        .overflow_y_hidden()
+                        .track_scroll(&list_horizontal_scroll_handle)
+                        .flex()
+                        .flex_col()
+                        .flex_grow(1.0)
+                        .min_h(px(0.0));
+
+                    // GPUI otherwise maps a vertical wheel delta onto this viewport's only
+                    // scrollable axis (X). Keep Y scrolling on the inner uniform list.
+                    horizontal_viewport.style().restrict_scroll_to_axis = Some(true);
+
+                    horizontal_viewport.child(list_canvas).into_any_element()
+                }
+                TableViewMode::Grid => grid_canvas.into_any_element(),
             })
-            .when_some(items, |this, items| {
-                let items_len = items.len();
-
-                this.child(match view_mode {
-                    TableViewMode::List => div()
-                        .image_cache(hummingbird_cache((T::get_table_name(), 0_usize), 200))
-                        .relative()
-                        .w_full()
-                        .h_full()
-                        .child(
-                            uniform_list("table-list", items_len, move |range, _, cx| {
-                                let start = range.start;
-                                let is_templ_render = range.start == 0 && range.end == 1;
-
-                                items[range]
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(idx, item)| {
-                                        let idx = idx + start;
-
-                                        if !is_templ_render {
-                                            prune_views(&views_model, &render_counter, idx, cx);
-                                        }
-
-                                        div()
-                                            .w_full()
-                                            .child(create_or_retrieve_view(
-                                                &views_model,
-                                                idx,
-                                                |cx| {
-                                                    TableItem::new(
-                                                        cx,
-                                                        item.clone(),
-                                                        &columns,
-                                                        handler.clone(),
-                                                        context_menu_context.clone(),
-                                                    )
-                                                },
-                                                cx,
-                                            ))
-                                            .into_any_element()
-                                    })
-                                    .collect()
-                            })
-                            .track_scroll(&scroll_handle)
-                            .w_full()
-                            .h_full(),
-                        )
-                        .child(floating_scrollbar(
-                            "table-scrollbar",
-                            scroll_handle,
-                            RightPad::Pad,
-                        )),
-                    TableViewMode::Grid => {
-                        let gap = 0.0;
-                        let grid_padding = 10.0;
-
-                        div()
-                            .relative()
-                            .w_full()
-                            .flex()
-                            .h_full()
-                            .px(px(grid_padding))
-                            .overflow_y_hidden()
-                            .child(
-                                uniform_grid(
-                                    "grid-list",
-                                    items_len,
-                                    grid_scroll_handle.clone(),
-                                    move |idx, _, cx| {
-                                        prune_views(
-                                            &grid_views_model,
-                                            &grid_render_counter,
-                                            idx,
-                                            cx,
-                                        );
-
-                                        let item_id = items[idx].clone();
-
-                                        let view = create_or_retrieve_view(
-                                            &grid_views_model,
-                                            idx,
-                                            |cx| {
-                                                grid_item::GridItem::new(
-                                                    cx,
-                                                    item_id,
-                                                    handler.clone(),
-                                                    context_menu_context.clone(),
-                                                    GridContext::Table,
-                                                )
-                                                .unwrap()
-                                            },
-                                            cx,
-                                        );
-
-                                        div()
-                                            .image_cache(hummingbird_cache(
-                                                (T::get_table_name(), idx + 1),
-                                                1,
-                                            ))
-                                            .size_full()
-                                            .child(view)
-                                            .into_any_element()
-                                    },
-                                )
-                                .min_item_width(px(grid_min_item_width))
-                                .gap(px(gap))
-                                .py(px(grid_padding)),
-                            )
-                            .child(floating_scrollbar(
-                                "grid-scrollbar",
-                                grid_scroll_handle,
-                                RightPad::Pad,
-                            ))
-                    }
-                })
+            .when(view_mode == TableViewMode::List, |this| {
+                this.child(
+                    floating_scrollbar("list-vertical-scrollbar", list_vertical_scroll_handle)
+                        .top(px(TABLE_HEADER_HEIGHT))
+                        .right(px(4.0))
+                        .bottom(px(14.0)),
+                )
+                .child(
+                    floating_scrollbar("list-horizontal-scrollbar", list_horizontal_scroll_handle)
+                        .axis(ScrollbarAxis::Horizontal)
+                        .left(px(4.0))
+                        .right(px(14.0)),
+                )
             })
     }
 }

@@ -6,11 +6,11 @@ use crate::devices::format::{ChannelSpec, SampleFormat};
 
 use super::{
     errors::{
-        ChannelRetrievalError, CloseError, FrameDurationError, MetadataError, OpenError,
-        PlaybackReadError, PlaybackStartError, PlaybackStopError, SeekError, TrackDurationError,
+        ChannelRetrievalError, FrameDurationError, MetadataError, OpenError, PlaybackReadError,
+        PlaybackStartError, SeekError, TrackDurationError,
     },
     metadata::Metadata,
-    pipeline::{ChannelProducers, DecodeResult},
+    pipeline::{AudioBlock, DecodeResult},
 };
 
 bitflags! {
@@ -62,13 +62,13 @@ pub trait MediaProvider: Send + Sync {
 pub trait MediaStream {
     /// Informs the Provider that the currently opened file is no longer needed. This function is
     /// not guaranteed to be called before open if a file is already opened.
-    fn close(&mut self) -> Result<(), CloseError>;
+    fn close(&mut self);
 
     /// Informs the Provider that playback is about to begin.
     fn start_playback(&mut self) -> Result<(), PlaybackStartError>;
 
     /// Informs the Provider that playback has ended and no more samples or metadata will be read.
-    fn stop_playback(&mut self) -> Result<(), PlaybackStopError>;
+    fn stop_playback(&mut self);
 
     /// Requests the Provider seek to the specified time in the current file. The time is provided
     /// in seconds. If no file is opened, this function should return an error.
@@ -79,9 +79,10 @@ pub trait MediaStream {
     /// be shorter than this duration, but it should never be longer.
     fn frame_duration(&self) -> Result<u64, FrameDurationError>;
 
-    /// Returns the metadata of the currently opened file. If no file is opened, or the provider
-    /// does not support metadata retrieval, this function should return an error.
-    fn read_metadata(&mut self) -> Result<&Metadata, MetadataError>;
+    /// Returns the metadata of the currently opened file, taking ownership of it. If no file is
+    /// opened, or the provider does not support metadata retrieval, this function should return
+    /// an error.
+    fn read_metadata(&mut self) -> Result<Metadata, MetadataError>;
 
     /// Returns whether or not there has been a metadata update since the last call to
     /// read_metadata.
@@ -126,12 +127,8 @@ pub trait MediaStream {
     /// resampling when the source rate differs from the device rate.
     fn sample_rate(&self) -> Result<u32, ChannelRetrievalError>;
 
-    /// Decode one packet/frame and write samples as f64 directly to the provided ring buffer producers.
-    /// The decoder is responsible for converting from the native sample format to f64.
-    fn decode_into(
-        &mut self,
-        output: &mut ChannelProducers<f64>,
-    ) -> Result<DecodeResult, PlaybackReadError>;
+    /// Fill the reusable block with decoded planar f64 samples.
+    fn decode_into(&mut self, output: &mut AudioBlock) -> Result<DecodeResult, PlaybackReadError>;
 
     /// Whether or not the media stream should attempt to use it's internal loop handling. With
     /// Symphonia, the media stream will seek to the loop start point from the EOF or loop end

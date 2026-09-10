@@ -36,11 +36,13 @@ use crate::{
     toasts,
     ui::{
         assets::HummingbirdAssetSource,
+        availability,
         caching::HummingbirdImageCache,
         command_palette::{CommandPalette, CommandPaletteHolder},
         library::missing_folder_dialog::MissingFolderDialog,
         models::WindowInformation,
         settings::corrupt_settings_dialog::CorruptSettingsDialog,
+        theme::Theme,
         toasts::ToastLayer,
     },
 };
@@ -48,10 +50,12 @@ use crate::{
 use super::{
     about::about_dialog,
     arguments::parse_args_and_prepare,
+    artist_picker::ArtistPickerView,
     components::{
         modal::{self, ModalActive},
         window_chrome::window_chrome,
     },
+    constants::PANEL_GAP,
     controls::Controls,
     global_actions::register_actions,
     header::Header,
@@ -71,6 +75,7 @@ struct MainWindow {
     pub library: Entity<Library>,
     pub header: Entity<Header>,
     pub search: Entity<SearchView>,
+    pub artist_picker: Entity<ArtistPickerView>,
     pub show_queue: Entity<bool>,
     pub show_lyrics: Entity<bool>,
     pub show_about: Entity<bool>,
@@ -126,11 +131,17 @@ impl Render for MainWindow {
                     .max_w_full()
                     .max_h_full()
                     .child(
-                        AnyView::from(self.controls.clone())
-                            .cached(StyleRefinement::default().w_full().flex().h(px(70.0))),
+AnyView::from(self.controls.clone()).cached(
+                            StyleRefinement::default()
+                                .w_full()
+                                .flex()
+                                .flex_shrink_0()
+                                .h(px(70.0)),
+                        ),
                     )
                     .child(
                         div()
+                            .my(PANEL_GAP)
                             .w_full()
                             .h_full()
                             .flex()
@@ -142,7 +153,7 @@ impl Render for MainWindow {
                                     StyleRefinement::default()
                                         .w_full()
                                         .h_full()
-                                        .flex_shrink()
+                                        .flex_shrink(1.0)
                                         .max_w_full()
                                         .max_h_full(),
                                 ),
@@ -151,6 +162,7 @@ impl Render for MainWindow {
                     )
                     .child(self.header.clone())
                     .child(self.search.clone())
+                    .child(self.artist_picker.clone())
                     .child(self.palette.clone())
                     .when(show_about, |this| {
                         this.child(about_dialog(self.about_focus.clone(), &|_, cx| {
@@ -226,18 +238,21 @@ fn main_window_bounds(cx: &mut App) -> WindowBounds {
     }
 }
 
-fn main_window_options(window_bounds: WindowBounds) -> WindowOptions {
+fn main_window_options(
+    window_bounds: WindowBounds,
+    window_background: WindowBackgroundAppearance,
+) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(window_bounds),
-        window_background: WindowBackgroundAppearance::Opaque,
+        window_background,
         window_decorations: Some(WindowDecorations::Client),
         window_min_size: Some(size(px(800.0), px(600.0))),
         titlebar: Some(TitlebarOptions {
             title: Some(tr!("APP_NAME").into()),
             appears_transparent: true,
             traffic_light_position: Some(Point {
-                x: px(12.0),
-                y: px(11.0),
+                x: px(14.0),
+                y: px(14.0),
             }),
         }),
         app_id: Some("org.mailliw.hummingbird".to_string()),
@@ -301,6 +316,7 @@ fn build_main_window(
             library: Library::new(cx),
             header: Header::new(cx),
             search: SearchView::new(cx),
+            artist_picker: ArtistPickerView::new(cx),
             show_queue,
             show_lyrics,
             show_about,
@@ -329,8 +345,10 @@ fn ensure_main_window(
         return Ok(window);
     }
 
+    let window_background = cx.global::<Theme>().window_background;
+
     let bounds = main_window_bounds(cx);
-    let options = main_window_options(bounds);
+    let options = main_window_options(bounds, window_background);
     let window = cx.open_window(options, |window, cx| {
         build_main_window(window, cx, toast_layer)
     })?;
@@ -437,23 +455,48 @@ pub fn run() -> anyhow::Result<()> {
         cx.set_global(modal::ModalActive(AtomicBool::new(false)));
 
         let settings_model = cx.global::<SettingsGlobal>().model.clone();
-        cx.observe(&settings_model, |_, cx| cx.refresh_windows())
-            .detach();
+        let availability_model = cx.global::<Models>().availability.clone();
+        cx.observe(&settings_model, move |_, cx| {
+            let roots = cx
+                .global::<SettingsGlobal>()
+                .model
+                .read(cx)
+                .scanning
+                .paths
+                .iter()
+                .map(|path| path.as_std_path().to_path_buf())
+                .collect();
+            availability::update_roots(&availability_model, roots, cx);
+            cx.refresh_windows();
+        })
+        .detach();
 
         if !language.is_empty() {
             I18N_MANAGER.write().unwrap().locale = Locale::new_from_locale_identifier(language);
         }
 
-        let mut scan_interface: ScanInterface = start_scanner(pool.clone(), scanning_settings);
+        let (scan_interface, scan_events) = start_scanner(pool.clone(), scanning_settings);
         let initial_health = cx.global::<Models>().settings_health.read(cx).clone();
         if matches!(initial_health, models::SettingsHealth::Ok) {
             scan_interface.scan();
         } else {
             tracing::warn!("Settings file is corrupt; holding scanner until resolved");
         }
-        scan_interface.start_broadcast(cx);
+        scan_interface.start_broadcast(scan_events, cx);
 
         cx.set_global(scan_interface);
+        availability::start_monitor(
+            cx,
+            cx.global::<Models>().availability.clone(),
+            cx.global::<SettingsGlobal>()
+                .model
+                .read(cx)
+                .scanning
+                .paths
+                .iter()
+                .map(|path| path.as_std_path().to_path_buf())
+                .collect(),
+        );
 
         let settings_health = cx.global::<Models>().settings_health.clone();
         cx.observe(&settings_health, |health, cx| {

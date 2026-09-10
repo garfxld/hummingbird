@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use cntp_i18n::{Date, I18N_MANAGER, StringModifier, tr};
+use cntp_i18n::{Date, I18N_MANAGER, ListFunction, StringModifier, tr};
 use gpui::{App, SharedString};
 use indexmap::IndexMap;
 use rustc_hash::FxBuildHasher;
@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     library::db::{AlbumMethod, AlbumSortMethod, ArtistSortMethod, LibraryAccess, TrackSortMethod},
+    media::numbering::format_track_table_position,
     ui::{
         availability::{
             album_has_available_tracks, artist_has_available_tracks, is_track_available,
@@ -67,10 +68,28 @@ fn format_album_release_date(
     format_album_release_date_with(release_date, format, length)
 }
 
+fn format_genres(genres: &[DBString]) -> Option<SharedString> {
+    if genres.is_empty() {
+        return None;
+    }
+
+    let genres: Vec<String> = genres.iter().map(|genre| genre.0.to_string()).collect();
+    let manager = I18N_MANAGER.read().unwrap();
+    Some(
+        manager
+            .locale
+            .build_list(&genres)
+            .with_list_function(ListFunction::Unit)
+            .build()
+            .into(),
+    )
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum AlbumColumn {
     Title,
     Artist,
+    Genres,
     Date,
     Label,
     CatalogNumber,
@@ -81,6 +100,7 @@ impl Column for AlbumColumn {
         match self {
             AlbumColumn::Title => tr!("COLUMN_TITLE", "Title").into(),
             AlbumColumn::Artist => tr!("COLUMN_ARTIST", "Artist").into(),
+            AlbumColumn::Genres => tr!("COLUMN_GENRES", "Genres").into(),
             AlbumColumn::Date => tr!("COLUMN_DATE", "Date").into(),
             AlbumColumn::Label => tr!("COLUMN_LABEL", "Label").into(),
             AlbumColumn::CatalogNumber => tr!("COLUMN_CATALOG_NUMBER", "Catalog Number").into(),
@@ -91,19 +111,13 @@ impl Column for AlbumColumn {
         !matches!(self, AlbumColumn::Title)
     }
 
-    fn all_columns() -> &'static [Self] {
-        &[
-            AlbumColumn::Title,
-            AlbumColumn::Artist,
-            AlbumColumn::Date,
-            AlbumColumn::Label,
-            AlbumColumn::CatalogNumber,
-        ]
+    fn is_primary(&self) -> bool {
+        matches!(self, AlbumColumn::Title)
     }
 }
 
 impl TableData<AlbumColumn> for Album {
-    type Identifier = (u32, String);
+    type Identifier = u32;
     type ContextMenuContext = AlbumContextMenuContext;
 
     fn get_table_name() -> SharedString {
@@ -155,23 +169,33 @@ impl TableData<AlbumColumn> for Album {
                 column: AlbumColumn::CatalogNumber,
                 ascending: false,
             }) => AlbumSortMethod::CatalogDesc,
+            Some(TableSort {
+                column: AlbumColumn::Genres,
+                ascending: true,
+            }) => AlbumSortMethod::GenresAsc,
+            Some(TableSort {
+                column: AlbumColumn::Genres,
+                ascending: false,
+            }) => AlbumSortMethod::GenresDesc,
             _ => AlbumSortMethod::ArtistAsc,
         };
 
-        Ok(cx.list_albums(sort_method)?)
+        Ok(cx
+            .list_albums(sort_method)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
     }
 
     fn get_row(cx: &mut gpui::App, id: Self::Identifier) -> anyhow::Result<Option<Arc<Self>>> {
-        Ok(cx.get_album_by_id(id.0 as i64, AlbumMethod::Metadata).ok())
+        Ok(cx.get_album_by_id(id as i64, AlbumMethod::Metadata).ok())
     }
 
-    fn get_column(&self, cx: &mut App, column: AlbumColumn) -> Option<SharedString> {
+    fn get_column(&self, _cx: &mut App, column: AlbumColumn) -> Option<SharedString> {
         match column {
             AlbumColumn::Title => Some(self.title.0.clone()),
-            AlbumColumn::Artist => cx
-                .get_artist_name_by_id(self.artist_id)
-                .ok()
-                .map(|v| (*v).clone().into()),
+            AlbumColumn::Artist => self.artist_display_override.as_ref().map(|v| v.0.clone()),
+            AlbumColumn::Genres => format_genres(&self.genres),
             AlbumColumn::Date => {
                 format_album_release_date(self.release_date.as_ref(), self.date_precision)
             }
@@ -192,27 +216,30 @@ impl TableData<AlbumColumn> for Album {
         true
     }
 
-    fn column_monospace(_column: AlbumColumn) -> bool {
-        false
-    }
-
     fn get_element_id(&self) -> impl Into<gpui::ElementId> {
         ("album", self.id as u32)
     }
 
     fn get_table_id(&self) -> Self::Identifier {
-        (self.id as u32, self.title.0.clone().into())
+        self.id as u32
     }
 
-    fn default_columns() -> IndexMap<AlbumColumn, f32, FxBuildHasher> {
+    fn available_columns() -> IndexMap<AlbumColumn, f32, FxBuildHasher> {
         let s = FxBuildHasher;
         let mut columns: IndexMap<AlbumColumn, f32, FxBuildHasher> = IndexMap::with_hasher(s);
         columns.insert(AlbumColumn::Title, 300.0);
         columns.insert(AlbumColumn::Artist, 200.0);
+        columns.insert(AlbumColumn::Genres, 200.0);
         columns.insert(AlbumColumn::Date, 125.0);
         columns.insert(AlbumColumn::Label, 150.0);
         // length is weird because the image column is 47.0
         columns.insert(AlbumColumn::CatalogNumber, 178.0);
+        columns
+    }
+
+    fn default_columns() -> IndexMap<AlbumColumn, f32, FxBuildHasher> {
+        let mut columns = Self::available_columns();
+        columns.shift_remove(&AlbumColumn::Genres);
         columns
     }
 
@@ -225,12 +252,12 @@ impl TableData<AlbumColumn> for Album {
 
     fn get_context_menu(
         &self,
-        _window: &mut gpui::Window,
-        _cx: &mut App,
+        window: &mut gpui::Window,
+        cx: &mut App,
         context: &Self::ContextMenuContext,
         _grid_context: GridContext,
     ) -> Option<(gpui::AnyElement, Option<gpui::AnyElement>)> {
-        Some((album_menu_for_table(self, context), None))
+        Some(album_menu_for_table(self, context, window, cx))
     }
 
     fn handle_middle_mouse(
@@ -246,27 +273,24 @@ impl TableData<AlbumColumn> for Album {
         true
     }
 
-    fn get_grid_content(&self, cx: &mut App) -> Option<(SharedString, Option<SharedString>)> {
+    fn get_grid_content(&self, _cx: &mut App) -> Option<(SharedString, Option<SharedString>)> {
         let title = self.title.0.clone();
-        let artist = cx
-            .get_artist_name_by_id(self.artist_id)
-            .ok()
-            .map(|v| (*v).clone().into());
+        let artist = self.artist_display_override.as_ref().map(|v| v.0.clone());
         Some((title, artist))
     }
 
     fn get_grid_content_for(
         &self,
-        cx: &mut App,
+        _cx: &mut App,
         context: GridContext,
     ) -> Option<(SharedString, Option<SharedString>)> {
         let title = self.title.0.clone();
 
         let artist_part: Option<String> = match context {
-            GridContext::Table => cx
-                .get_artist_name_by_id(self.artist_id)
-                .ok()
-                .map(|v| (*v).to_string()),
+            GridContext::Table => self
+                .artist_display_override
+                .as_ref()
+                .map(|v| v.0.to_string()),
             GridContext::Standalone => None,
         };
 
@@ -285,6 +309,13 @@ impl TableData<AlbumColumn> for Album {
     fn is_available(&self, cx: &mut App) -> bool {
         album_has_available_tracks(cx, self.id)
     }
+
+    fn default_sort() -> Option<TableSort<AlbumColumn>> {
+        Some(TableSort {
+            column: AlbumColumn::Artist,
+            ascending: true,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -293,6 +324,7 @@ pub enum TrackColumn {
     Title,
     Album,
     Artist,
+    Genres,
     Length,
 }
 
@@ -303,6 +335,7 @@ impl Column for TrackColumn {
             TrackColumn::Title => tr!("COLUMN_TITLE").into(),
             TrackColumn::Album => tr!("COLUMN_ALBUM", "Album").into(),
             TrackColumn::Artist => tr!("COLUMN_ARTIST").into(),
+            TrackColumn::Genres => tr!("COLUMN_GENRES").into(),
             TrackColumn::Length => tr!("COLUMN_LENGTH", "Length").into(),
         }
     }
@@ -311,19 +344,67 @@ impl Column for TrackColumn {
         !matches!(self, TrackColumn::Title)
     }
 
-    fn all_columns() -> &'static [Self] {
-        &[
-            TrackColumn::TrackNumber,
-            TrackColumn::Title,
-            TrackColumn::Album,
-            TrackColumn::Artist,
-            TrackColumn::Length,
-        ]
+    fn is_primary(&self) -> bool {
+        matches!(self, TrackColumn::Title)
+    }
+}
+
+pub fn track_table_sort(sort: Option<TableSort<TrackColumn>>) -> TrackSortMethod {
+    match sort {
+        Some(TableSort {
+            column: TrackColumn::Title,
+            ascending: true,
+        }) => TrackSortMethod::TitleAsc,
+        Some(TableSort {
+            column: TrackColumn::Title,
+            ascending: false,
+        }) => TrackSortMethod::TitleDesc,
+        Some(TableSort {
+            column: TrackColumn::Artist,
+            ascending: true,
+        }) => TrackSortMethod::ArtistAsc,
+        Some(TableSort {
+            column: TrackColumn::Artist,
+            ascending: false,
+        }) => TrackSortMethod::ArtistDesc,
+        Some(TableSort {
+            column: TrackColumn::Album,
+            ascending: true,
+        }) => TrackSortMethod::AlbumAsc,
+        Some(TableSort {
+            column: TrackColumn::Album,
+            ascending: false,
+        }) => TrackSortMethod::AlbumDesc,
+        Some(TableSort {
+            column: TrackColumn::Length,
+            ascending: true,
+        }) => TrackSortMethod::DurationAsc,
+        Some(TableSort {
+            column: TrackColumn::Length,
+            ascending: false,
+        }) => TrackSortMethod::DurationDesc,
+        Some(TableSort {
+            column: TrackColumn::TrackNumber,
+            ascending: true,
+        }) => TrackSortMethod::TrackNumberAsc,
+        Some(TableSort {
+            column: TrackColumn::TrackNumber,
+            ascending: false,
+        }) => TrackSortMethod::TrackNumberDesc,
+        Some(TableSort {
+            column: TrackColumn::Genres,
+            ascending: true,
+        }) => TrackSortMethod::GenresAsc,
+        Some(TableSort {
+            column: TrackColumn::Genres,
+            ascending: false,
+        }) => TrackSortMethod::GenresDesc,
+        _ => TrackSortMethod::ArtistAsc,
     }
 }
 
 impl TableData<TrackColumn> for Track {
-    type Identifier = (i64, String, Option<i64>, String);
+    type Identifier = i64;
     type ContextMenuContext = TrackContextMenuContext;
 
     fn get_table_name() -> SharedString {
@@ -334,78 +415,33 @@ impl TableData<TrackColumn> for Track {
         cx: &mut gpui::App,
         sort: Option<TableSort<TrackColumn>>,
     ) -> anyhow::Result<Vec<Self::Identifier>> {
-        let sort_method = match sort {
-            Some(TableSort {
-                column: TrackColumn::Title,
-                ascending: true,
-            }) => TrackSortMethod::TitleAsc,
-            Some(TableSort {
-                column: TrackColumn::Title,
-                ascending: false,
-            }) => TrackSortMethod::TitleDesc,
-            Some(TableSort {
-                column: TrackColumn::Artist,
-                ascending: true,
-            }) => TrackSortMethod::ArtistAsc,
-            Some(TableSort {
-                column: TrackColumn::Artist,
-                ascending: false,
-            }) => TrackSortMethod::ArtistDesc,
-            Some(TableSort {
-                column: TrackColumn::Album,
-                ascending: true,
-            }) => TrackSortMethod::AlbumAsc,
-            Some(TableSort {
-                column: TrackColumn::Album,
-                ascending: false,
-            }) => TrackSortMethod::AlbumDesc,
-            Some(TableSort {
-                column: TrackColumn::Length,
-                ascending: true,
-            }) => TrackSortMethod::DurationAsc,
-            Some(TableSort {
-                column: TrackColumn::Length,
-                ascending: false,
-            }) => TrackSortMethod::DurationDesc,
-            Some(TableSort {
-                column: TrackColumn::TrackNumber,
-                ascending: true,
-            }) => TrackSortMethod::TrackNumberAsc,
-            Some(TableSort {
-                column: TrackColumn::TrackNumber,
-                ascending: false,
-            }) => TrackSortMethod::TrackNumberDesc,
-            _ => TrackSortMethod::ArtistAsc,
-        };
-
-        Ok(cx.list_tracks(sort_method)?)
+        Ok(cx
+            .list_tracks(track_table_sort(sort))?
+            .into_iter()
+            .map(|(id, _, _, _)| id)
+            .collect())
     }
 
     fn get_row(cx: &mut gpui::App, id: Self::Identifier) -> anyhow::Result<Option<Arc<Self>>> {
-        Ok(cx.get_track_by_id(id.0).ok())
+        Ok(cx.get_track_by_id(id).ok())
     }
 
     fn get_column(&self, cx: &mut App, column: TrackColumn) -> Option<SharedString> {
         match column {
             TrackColumn::TrackNumber => {
-                let vinyl_numbering = self
+                let number_display_mode = self
                     .album_id
                     .and_then(|id| cx.get_album_by_id(id, AlbumMethod::Metadata).ok())
-                    .map(|album| album.vinyl_numbering)
-                    .unwrap_or(false);
+                    .map(|album| album.number_display_mode)
+                    .unwrap_or_default();
 
-                match (self.disc_number, self.track_number) {
-                    (Some(disc), Some(track)) => {
-                        if vinyl_numbering {
-                            let side = (b'A' + (disc - 1) as u8) as char;
-                            Some(format!("{}{}", side, track).into())
-                        } else {
-                            Some(format!("{}-{}", disc, track).into())
-                        }
-                    }
-                    (None, Some(track)) => Some(track.to_string().into()),
-                    _ => None,
-                }
+                format_track_table_position(
+                    number_display_mode,
+                    self.disc_number,
+                    self.track_number,
+                    self.track_section,
+                )
+                .map(SharedString::from)
             }
             TrackColumn::Title => Some(self.title.0.clone()),
             TrackColumn::Album => {
@@ -424,33 +460,28 @@ impl TableData<TrackColumn> for Track {
                     cx.get_album_by_id(album_id, AlbumMethod::Metadata)
                         .ok()
                         .and_then(|album| {
-                            cx.get_artist_name_by_id(album.artist_id)
-                                .ok()
-                                .map(|v| (*v).clone().into())
+                            album.artist_display_override.as_ref().map(|v| v.0.clone())
                         })
                 } else {
                     None
                 }
             }
+            TrackColumn::Genres => format_genres(&self.genres),
             TrackColumn::Length => Some(format_duration(self.duration, true).into()),
         }
     }
 
     fn get_image_path(&self) -> Option<SharedString> {
-        self.album_id
-            .map(|album_id| format!("!db://album/{album_id}/thumb").into())
+        // every track has its own artwork association (shared with the album when identical)
+        Some(format!("!db://track/{}/thumb", self.id).into())
     }
 
     fn get_full_image_key(&self) -> Option<ManagedImageKey> {
-        self.album_id.map(ManagedImageKey::Album)
+        Some(ManagedImageKey::Track(self.id))
     }
 
     fn has_images() -> bool {
         true
-    }
-
-    fn column_monospace(_column: TrackColumn) -> bool {
-        false
     }
 
     fn get_element_id(&self) -> impl Into<gpui::ElementId> {
@@ -458,22 +489,24 @@ impl TableData<TrackColumn> for Track {
     }
 
     fn get_table_id(&self) -> Self::Identifier {
-        (
-            self.id,
-            self.title.0.clone().into(),
-            self.album_id,
-            self.location.to_string_lossy().to_string(),
-        )
+        self.id
     }
 
-    fn default_columns() -> IndexMap<TrackColumn, f32, FxBuildHasher> {
+    fn available_columns() -> IndexMap<TrackColumn, f32, FxBuildHasher> {
         let s = FxBuildHasher;
         let mut columns: IndexMap<TrackColumn, f32, FxBuildHasher> = IndexMap::with_hasher(s);
         columns.insert(TrackColumn::TrackNumber, 75.0);
         columns.insert(TrackColumn::Title, 350.0);
         columns.insert(TrackColumn::Album, 250.0);
         columns.insert(TrackColumn::Artist, 225.0);
+        columns.insert(TrackColumn::Genres, 225.0);
         columns.insert(TrackColumn::Length, 100.0);
+        columns
+    }
+
+    fn default_columns() -> IndexMap<TrackColumn, f32, FxBuildHasher> {
+        let mut columns = Self::available_columns();
+        columns.shift_remove(&TrackColumn::Genres);
         columns
     }
 
@@ -486,8 +519,8 @@ impl TableData<TrackColumn> for Track {
         )))
     }
 
-    fn is_available(&self, _cx: &mut App) -> bool {
-        is_track_available(self)
+    fn is_available(&self, cx: &mut App) -> bool {
+        is_track_available(cx, self)
     }
 
     fn get_context_menu(
@@ -499,7 +532,7 @@ impl TableData<TrackColumn> for Track {
     ) -> Option<(gpui::AnyElement, Option<gpui::AnyElement>)> {
         Some(track_menu_for_table(
             self,
-            is_track_available(self),
+            is_track_available(cx, self),
             context,
             window,
             cx,
@@ -513,6 +546,13 @@ impl TableData<TrackColumn> for Track {
         _grid_context: GridContext,
     ) {
         play_track_next(cx, self);
+    }
+
+    fn default_sort() -> Option<TableSort<TrackColumn>> {
+        Some(TableSort {
+            column: TrackColumn::Artist,
+            ascending: true,
+        })
     }
 }
 
@@ -536,12 +576,8 @@ impl Column for ArtistColumn {
         !matches!(self, ArtistColumn::Name)
     }
 
-    fn all_columns() -> &'static [Self] {
-        &[
-            ArtistColumn::Name,
-            ArtistColumn::Albums,
-            ArtistColumn::Tracks,
-        ]
+    fn is_primary(&self) -> bool {
+        matches!(self, ArtistColumn::Name)
     }
 }
 
@@ -612,10 +648,6 @@ impl TableData<ArtistColumn> for ArtistWithCounts {
         false
     }
 
-    fn column_monospace(_column: ArtistColumn) -> bool {
-        false
-    }
-
     fn get_element_id(&self) -> impl Into<gpui::ElementId> {
         ("artist", self.id as u32)
     }
@@ -628,13 +660,20 @@ impl TableData<ArtistColumn> for ArtistWithCounts {
         artist_has_available_tracks(cx, self.id)
     }
 
-    fn default_columns() -> IndexMap<ArtistColumn, f32, FxBuildHasher> {
+    fn available_columns() -> IndexMap<ArtistColumn, f32, FxBuildHasher> {
         let s = FxBuildHasher;
         let mut columns: IndexMap<ArtistColumn, f32, FxBuildHasher> = IndexMap::with_hasher(s);
         columns.insert(ArtistColumn::Name, 400.0);
         columns.insert(ArtistColumn::Albums, 150.0);
         columns.insert(ArtistColumn::Tracks, 150.0);
         columns
+    }
+
+    fn default_sort() -> Option<TableSort<ArtistColumn>> {
+        Some(TableSort {
+            column: ArtistColumn::Name,
+            ascending: true,
+        })
     }
 }
 

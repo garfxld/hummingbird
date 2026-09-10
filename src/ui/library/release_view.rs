@@ -4,9 +4,11 @@ use cntp_i18n::tr;
 use gpui::*;
 use prelude::FluentBuilder;
 
+use super::detail_view_padding;
 use crate::{
     library::{
         db::{AlbumMethod, LibraryAccess},
+        scan::ScanEvent,
         types::{
             Album, DATE_PRECISION_FULL_DATE, DATE_PRECISION_YEAR, DATE_PRECISION_YEAR_MONTH,
             DBString, Track,
@@ -14,22 +16,24 @@ use crate::{
     },
     playback::{queue::QueueItemData, thread::PlaybackState},
     ui::{
-        availability::{has_available_tracks, is_track_available},
+        availability::{has_available_tracks, is_track_available, snapshot},
         caching::hummingbird_cache,
         components::{
             button::{ButtonSize, button},
             icons::{DOTS_VERTICAL, HEART, HEART_FILLED, icon},
             playback_controls::playback_controls,
             popover::{PopoverPosition, popover},
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
             table::table_data::TABLE_MAX_WIDTH,
             tooltip::build_tooltip,
         },
         library::{
-            ViewSwitchMessage,
             collection_summary::format_collection_summary,
-            context_menus::{AlbumContextMenuContext, album::AlbumContextMenu},
-            nav_buttons::detail_close_button,
+            context_menus::{
+                AlbumContextMenuContext, add_album_to_playlist_state, album::AlbumContextMenu,
+                navigate_to_album_artists,
+            },
+            library_view_header::LibraryViewHeader,
             track_listing::{ArtistNameVisibility, TrackListing},
         },
         models::{LIKED_SONGS_PLAYLIST_ID, Models, PlaybackInfo, PlaylistEvent, toggle_album_like},
@@ -39,6 +43,7 @@ use crate::{
 };
 
 const RELEASE_SCROLL_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+pub const RELEASE_ARTWORK_SIZE: Pixels = px(140.0);
 
 fn compute_all_liked(cx: &App, tracks: &[Track]) -> bool {
     if tracks.is_empty() {
@@ -47,6 +52,24 @@ fn compute_all_liked(cx: &App, tracks: &[Track]) -> bool {
     let ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
     cx.playlist_contains_all_tracks(LIKED_SONGS_PLAYLIST_ID, &ids)
         .unwrap_or(false)
+}
+
+fn release_info(album: &Album) -> Option<SharedString> {
+    let mut info = String::default();
+
+    if let Some(label) = &album.label {
+        info += &label.to_string();
+    }
+
+    if album.label.is_some() && album.catalog_number.is_some() {
+        info += " • ";
+    }
+
+    if let Some(catalog_number) = &album.catalog_number {
+        info += &catalog_number.to_string();
+    }
+
+    (!info.is_empty()).then_some(SharedString::from(info))
 }
 
 pub struct ReleaseView {
@@ -75,10 +98,7 @@ impl ReleaseView {
             let tracks = cx
                 .list_tracks_in_album(album_id)
                 .expect("Failed to retrieve tracks");
-            let artist_name = cx
-                .get_artist_name_by_id(album.artist_id)
-                .ok()
-                .map(|v| (*v).clone().into());
+            let artist_name = album.artist_display_override.clone();
 
             cx.on_release(|this: &mut Self, cx: &mut App| {
                 ImageSource::Resource(Resource::Embedded(this.img_path.clone())).remove_asset(cx);
@@ -88,42 +108,36 @@ impl ReleaseView {
             let track_listing = TrackListing::new(
                 cx,
                 tracks.clone(),
-                ArtistNameVisibility::Always,
-                album.vinyl_numbering,
+ArtistNameVisibility::Always,
+                album.number_display_mode,
                 false,
                 true,
             );
+            let availability = cx.global::<Models>().availability.clone();
+            cx.observe(&availability, |_, _, cx| cx.notify()).detach();
+            let scan_state = cx.global::<Models>().scan_state.clone();
+            cx.observe(&scan_state, |this: &mut Self, state, cx| {
+                if matches!(
+                    *state.read(cx),
+                    ScanEvent::ScanCompleteIdle
+                        | ScanEvent::ScanCompleteWatching
+                        | ScanEvent::TargetedRescanComplete
+                ) {
+                    this.refresh(cx);
+                }
+            })
+            .detach();
             let collection_summary = format_collection_summary(
                 tracks.len() as i64,
                 tracks.iter().map(|track| track.duration).sum(),
             );
 
-            let release_info = {
-                let mut info = String::default();
-
-                if let Some(label) = &album.label {
-                    info += &label.to_string();
-                }
-
-                if album.label.is_some() && album.catalog_number.is_some() {
-                    info += " • ";
-                }
-
-                if let Some(catalog_number) = &album.catalog_number {
-                    info += &catalog_number.to_string();
-                }
-
-                if !info.is_empty() {
-                    Some(SharedString::from(info))
-                } else {
-                    None
-                }
-            };
+            let release_info = release_info(&album);
 
             let pending_scroll = target_track_id.and_then(|track_id| {
                 tracks
                     .iter()
-                    .position(|track| track.id == track_id && is_track_available(track))
+                    .position(|track| track.id == track_id && is_track_available(cx, track))
             });
 
             let all_liked = compute_all_liked(cx, &tracks);
@@ -159,41 +173,76 @@ impl ReleaseView {
         })
     }
 
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let album_id = self.album.id;
+        let album = cx
+            .get_album_by_id(album_id, AlbumMethod::FullQuality)
+            .expect("Failed to retrieve album");
+        let tracks = cx
+            .list_tracks_in_album(album_id)
+            .expect("Failed to retrieve tracks");
+        let artist_name = album.artist_display_override.clone();
+        let track_listing = TrackListing::new(
+            cx,
+            tracks.clone(),
+            ArtistNameVisibility::OnlyIfDifferent(artist_name.clone()),
+            album.number_display_mode,
+            false,
+            true,
+        );
+        let collection_summary = format_collection_summary(
+            tracks.len() as i64,
+            tracks.iter().map(|track| track.duration).sum(),
+        );
+        let release_info = release_info(&album);
+        let all_liked = compute_all_liked(cx, &tracks);
+
+        self.album = album;
+        self.artist_name = artist_name;
+        self.tracks = tracks;
+        self.track_listing = track_listing;
+        self.collection_summary = collection_summary;
+        self.release_info = release_info;
+        self.all_liked = all_liked;
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn render_header(
         &self,
         theme: &Theme,
         has_available_tracks: bool,
         current_track_in_album: bool,
         is_playing: bool,
-        show_close_button: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
+        padding: Pixels,
     ) -> impl IntoElement {
+        let availability = snapshot(cx);
+
         div()
-            .pt(px(52.0))
-            .flex_shrink()
+            .pt(px(49.0))
+            .flex_shrink_0()
             .flex()
             .overflow_x_hidden()
-            .px(px(18.0))
+            .pr(padding)
             .w_full()
             .relative()
-            .when(show_close_button, |this| {
-                this.child(detail_close_button("release_close"))
-            })
+            .child(LibraryViewHeader::detail("release_close"))
             .child(
                 div()
+                    .m(padding)
                     .rounded(px(10.0))
                     .bg(theme.album_art_background)
                     .shadow_sm()
-                    .w(px(160.0))
-                    .h(px(160.0))
+                    .w(RELEASE_ARTWORK_SIZE)
+                    .h(RELEASE_ARTWORK_SIZE)
                     .flex_shrink_0()
                     .overflow_hidden()
                     .child(
                         img(self.img_path.clone())
-                            .min_w(px(160.0))
-                            .min_h(px(160.0))
-                            .max_w(px(160.0))
-                            .max_h(px(160.0))
+                            .w(RELEASE_ARTWORK_SIZE)
+                            .h(RELEASE_ARTWORK_SIZE)
                             .overflow_hidden()
                             .flex()
                             // TODO: Ideally this should be ObjectFit::Cover, but this
@@ -205,9 +254,10 @@ impl ReleaseView {
             )
             .child(
                 div()
-                    .ml(px(18.0))
-                    .mt_auto()
-                    .flex_shrink()
+                    .h_full()
+                    .justify_end()
+                    .pb(padding)
+                    .flex_shrink(1.0)
                     .flex()
                     .flex_col()
                     .w_full()
@@ -227,24 +277,23 @@ impl ReleaseView {
                         div()
                             .id(("release_view_artist", self.album.id as usize))
                             .text_ellipsis()
-                            .overflow_x_hidden()
                             .cursor_pointer()
-                            .hover(|this| this.underline())
+.hover(|this| this.underline())
+                            .text_size(px(15.0))
+                            .text_color(theme.text_secondary)
+                            .line_height(px(15.0))
+                            .mb(px(5.0))
                             .on_click({
-                                let artist_id = self.album.artist_id;
-                                move |_, _, cx| {
-                                    let model = cx.global::<Models>().switcher_model.clone();
-
-                                    model.update(cx, |_, cx| {
-                                        cx.emit(ViewSwitchMessage::Artist(artist_id));
-                                    })
+                                let album_id = self.album.id;
+                                move |ev, _, cx| {
+                                    navigate_to_album_artists(cx, album_id, ev.position());
                                 }
                             })
                             .when_some(self.artist_name.clone(), |this, artist| this.child(artist)),
                     )
                     .child(
                         div()
-                            .pb(px(10.0))
+.pb(px(10.0))
                             .text_sm()
                             .text_color(theme.text_secondary)
                             .child(self.collection_summary.clone()),
@@ -263,10 +312,14 @@ impl ReleaseView {
                                     is_playing,
                                     {
                                         let tracks = self.track_listing.tracks().clone();
+                                        let availability = availability.clone();
                                         move |cx| {
                                             tracks
                                                 .iter()
-                                                .filter(|track| is_track_available(track))
+                                                .filter(|track| {
+                                                    availability
+                                                        .is_track_path_available(&track.location)
+                                                })
                                                 .map(|track| {
                                                     QueueItemData::new(
                                                         cx,
@@ -280,9 +333,16 @@ impl ReleaseView {
                                     },
                                 )
                                 .show_add_to_queue(false)
-                                .trailing(self.render_menu_button(cx)),
+                                .trailing(self.render_menu_button(window, cx)),
                             )
-                            .child(self.render_like_button(theme)),
+                            .child(self.render_like_button(theme))
+                            .child(
+                                div()
+                                    .ml_auto()
+                                    .text_sm()
+                                    .text_color(theme.text_secondary)
+                                    .child(self.collection_summary.clone()),
+                            ),
                     ),
             )
     }
@@ -326,10 +386,12 @@ impl ReleaseView {
         cx.notify();
     }
 
-    fn render_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_menu_button(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let menu_open = self.menu_open;
 
-        div()
+        let (show_add_to, add_to) =
+            add_album_to_playlist_state("album-menu-state", self.album.id, window, cx);
+        let menu_btn = div()
             .relative()
             .flex()
             .child(
@@ -372,69 +434,82 @@ impl ReleaseView {
                                 .on_click(move |_, _, cx| close(cx))
                                 .child(AlbumContextMenu::new(
                                     album,
+                                    show_add_to,
                                     AlbumContextMenuContext::default(),
                                 )),
                         ),
                 )
-            })
+            });
+
+        div().child(menu_btn).child(add_to).into_any_element()
     }
 
-    fn render_footer(&self, theme: &Theme) -> impl IntoElement {
+    fn render_footer(&self, theme: &Theme, padding: Pixels) -> impl IntoElement {
         div()
+            // Fill unused viewport space without compressing the footer when scrolling.
+            .flex_grow(1.0)
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(theme.border_color)
             .flex()
-            .flex_col()
-            .text_sm()
-            .ml(px(18.0))
-            .pt(px(12.0))
-            .pb(px(12.0))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.text_secondary)
-            .when_some(self.release_info.clone(), |this, release_info| {
-                this.child(div().child(release_info))
-            })
-            .when_some(
-                self.album
-                    .release_date
-                    .as_ref()
-                    .zip(self.album.date_precision),
-                |this, (date, precision)| match precision {
-                    DATE_PRECISION_FULL_DATE | DATE_PRECISION_YEAR_MONTH => {
-                        if let Ok(nd) =
-                            chrono::NaiveDate::parse_from_str(date.0.as_str(), "%Y-%m-%d")
-                        {
-                            let dt = nd.and_hms_opt(0, 0, 0).unwrap();
-                            let utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                                dt,
-                                chrono::Utc,
-                            );
+            .w_full()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .text_sm()
+                    .ml(padding)
+                    .pt(px(11.0))
+                    .pb(px(12.0))
+                    .text_color(theme.text_secondary)
+                    .when_some(self.release_info.clone(), |this, release_info| {
+                        this.child(div().child(release_info))
+                    })
+                    .when_some(
+                        self.album
+                            .release_date
+                            .as_ref()
+                            .zip(self.album.date_precision),
+                        |this, (date, precision)| match precision {
+                            DATE_PRECISION_FULL_DATE | DATE_PRECISION_YEAR_MONTH => {
+                                if let Ok(nd) =
+                                    chrono::NaiveDate::parse_from_str(date.0.as_str(), "%Y-%m-%d")
+                                {
+                                    let dt = nd.and_hms_opt(0, 0, 0).unwrap();
+                                    let utc =
+                                        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                                            dt,
+                                            chrono::Utc,
+                                        );
 
-                            this.child(if precision == DATE_PRECISION_FULL_DATE {
-                                tr!(
-                                    "RELEASED_DATE",
-                                    "Released {{date}}",
-                                    date:date("YMD", length="long")=utc
-                                )
-                            } else {
-                                tr!(
-                                    "RELEASED_DATE",
-                                    date:date("YM", length="long")=utc
-                                )
-                            })
-                        } else {
-                            this
-                        }
-                    }
-                    DATE_PRECISION_YEAR => this.child(tr!(
-                        "RELEASED_YEAR",
-                        "Released {{year}}",
-                        year = date.0.as_str()[..4]
-                    )),
-                    _ => this,
-                },
+                                    this.child(if precision == DATE_PRECISION_FULL_DATE {
+                                        tr!(
+                                            "RELEASED_DATE",
+                                            "Released {{date}}",
+                                            date:date("YMD", length="long")=utc
+                                        )
+                                    } else {
+                                        tr!(
+                                            "RELEASED_DATE",
+                                            date:date("YM", length="long")=utc
+                                        )
+                                    })
+                                } else {
+                                    this
+                                }
+                            }
+                            DATE_PRECISION_YEAR => this.child(tr!(
+                                "RELEASED_YEAR",
+                                "Released {{year}}",
+                                year = date.0.as_str()[..4]
+                            )),
+                            _ => this,
+                        },
+                    )
+                    .when_some(self.album.isrc.as_ref(), |this, isrc| {
+                        this.child(div().child(isrc.clone()))
+                    }),
             )
-            .when_some(self.album.isrc.as_ref(), |this, isrc| {
-                this.child(div().child(isrc.clone()))
-            })
     }
 
     fn schedule_scroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -535,6 +610,8 @@ enum FollowTarget {
 
 impl Render for ReleaseView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let padding = detail_view_padding(cx);
+
         let settings = cx
             .global::<crate::settings::SettingsGlobal>()
             .model
@@ -555,6 +632,7 @@ impl Render for ReleaseView {
 
         let is_playing =
             cx.global::<PlaybackInfo>().playback_state.read(cx) == &PlaybackState::Playing;
+        let availability = snapshot(cx);
         // flag whether current track is part of the album
         let current_track_in_album = cx
             .global::<PlaybackInfo>()
@@ -562,11 +640,12 @@ impl Render for ReleaseView {
             .read(cx)
             .clone()
             .is_some_and(|current_track| {
-                self.tracks
-                    .iter()
-                    .any(|track| current_track == track.location && is_track_available(track))
+                self.tracks.iter().any(|track| {
+                    current_track == track.location
+                        && availability.is_track_path_available(&track.location)
+                })
             });
-        let has_available_tracks = has_available_tracks(self.tracks.as_ref());
+        let has_available_tracks = has_available_tracks(cx, self.tracks.as_ref());
 
         let scroll_handle = self.scroll_handle.clone();
         let settings = cx
@@ -574,13 +653,13 @@ impl Render for ReleaseView {
             .model
             .read(cx);
         let full_width = settings.interface.effective_full_width();
-        let two_column = settings.interface.two_column_library;
 
         div()
             .image_cache(hummingbird_cache(("release", self.album.id as u64), 1))
             .flex()
             .flex_col()
             .w_full()
+            .h_full()
             .max_h_full()
             .relative()
             .overflow_hidden()
@@ -588,31 +667,32 @@ impl Render for ReleaseView {
             .child(
                 div()
                     .id("release-view")
+                    .flex()
+                    .flex_col()
                     .overflow_y_scroll()
                     .track_scroll(&scroll_handle)
                     .w_full()
-                    .flex_shrink()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .flex_shrink(1.0)
                     .overflow_x_hidden()
                     .child(self.render_header(
                         &theme,
                         has_available_tracks,
                         current_track_in_album,
                         is_playing,
-                        two_column,
+                        window,
                         cx,
+                        padding,
                     ))
                     .children(self.track_listing.track_elements())
                     .when(
                         self.release_info.is_some()
                             || self.album.release_date.is_some()
                             || self.album.isrc.is_some(),
-                        |this| this.child(self.render_footer(&theme)),
+                        |this| this.child(self.render_footer(&theme, padding)),
                     ),
             )
-            .child(floating_scrollbar(
-                "release_scrollbar",
-                scroll_handle,
-                RightPad::Pad,
-            ))
+            .child(floating_scrollbar("release_scrollbar", scroll_handle).right(px(4.0)))
     }
 }

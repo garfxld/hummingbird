@@ -29,7 +29,7 @@ use crate::{
             icons::{CROSS, FILE_EXPORT, HEART, PENCIL, PLAY, PLAYLIST, PLUS, SHUFFLE},
             menu::{menu, menu_item, menu_separator},
             popover::{PopoverPosition, popover},
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
             sidebar::sidebar_item,
             textbox::Textbox,
         },
@@ -208,10 +208,12 @@ impl Render for PlaylistList {
         let mut main = div()
             .pt(px(6.0))
             .id("sidebar-playlist")
-            .flex_grow()
+            .w_full()
+            .flex_grow(1.0)
             .min_h(px(0.0))
             .overflow_y_scroll()
             .track_scroll(&scroll_handle)
+            .when(collapsed, |this| this.flex().flex_col().items_center())
             .when(allow_reorder, |this| {
                 this.on_drag_move::<DragData>(cx.listener(
                     move |this: &mut PlaylistList, event: &DragMoveEvent<DragData>, _, cx| {
@@ -322,7 +324,7 @@ impl Render for PlaylistList {
                         div()
                             .child(playlist_label.clone())
                             .text_ellipsis()
-                            .flex_shrink()
+                            .flex_shrink(1.0)
                             .overflow_x_hidden()
                             .w_full(),
                     )
@@ -332,7 +334,7 @@ impl Render for PlaylistList {
                             .text_color(theme.text_secondary)
                             .text_xs()
                             .text_ellipsis()
-                            .flex_shrink()
+                            .flex_shrink(1.0)
                             .w_full()
                             .overflow_x_hidden()
                             .mt(px(2.0))
@@ -693,7 +695,12 @@ impl Render for PlaylistList {
                 .child(
                     sidebar_item("new-playlist-btn")
                         .icon(PLUS)
-                        .child(tr!("NEW_PLAYLIST", "New Playlist"))
+                        .when(!collapsed, |this| {
+                            this.child(tr!("NEW_PLAYLIST", "New Playlist"))
+                        })
+                        .when(collapsed, |this| {
+                            this.collapsed().collapsed_label(tr!("NEW_PLAYLIST"))
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
@@ -761,21 +768,18 @@ impl Render for PlaylistList {
         );
 
         div()
+            .items_center()
             .gap(px(2.0))
             .mt(px(-6.0))
             .flex()
             .flex_col()
             .w_full()
-            .flex_grow()
+            .flex_grow(1.0)
             .min_h(px(0.0))
             .relative()
             .child(main)
             .when(!collapsed, |this| {
-                this.child(floating_scrollbar(
-                    "playlist_list_scrollbar",
-                    scroll_handle,
-                    RightPad::None,
-                ))
+                this.child(floating_scrollbar("playlist_list_scrollbar", scroll_handle))
             })
     }
 }
