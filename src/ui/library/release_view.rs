@@ -214,10 +214,22 @@ impl ReleaseView {
                     .overflow_x_hidden()
                     .child(
                         div()
+                            .font_weight(FontWeight::EXTRA_BOLD)
+                            .text_size(rems(2.5))
+                            .line_height(rems(2.75))
+                            .overflow_x_hidden()
+                            .pb(px(10.0))
+                            .w_full()
+                            .text_ellipsis()
+                            .child(self.album.title.clone()),
+                    )
+                    .child(
+                        div()
                             .id(("release_view_artist", self.album.id as usize))
                             .text_ellipsis()
                             .overflow_x_hidden()
                             .cursor_pointer()
+                            .hover(|this| this.underline())
                             .on_click({
                                 let artist_id = self.album.artist_id;
                                 move |_, _, cx| {
@@ -229,17 +241,6 @@ impl ReleaseView {
                                 }
                             })
                             .when_some(self.artist_name.clone(), |this, artist| this.child(artist)),
-                    )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::EXTRA_BOLD)
-                            .text_size(rems(2.5))
-                            .line_height(rems(2.75))
-                            .overflow_x_hidden()
-                            .pb(px(10.0))
-                            .w_full()
-                            .text_ellipsis()
-                            .child(self.album.title.clone()),
                     )
                     .child(
                         div()
