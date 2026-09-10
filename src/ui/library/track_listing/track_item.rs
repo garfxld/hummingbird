@@ -63,6 +63,7 @@ fn measure_track_number_width(window: &mut Window, text: &SharedString) -> Pixel
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: None,
     };
 
     let line = window
@@ -100,7 +101,7 @@ impl TrackItem {
                 album_art: track
                     .album_id
                     .map(|v| format!("!db://album/{v}/thumb").into()),
-                is_available: is_track_available(&track),
+                is_available: is_track_available(cx, &track),
                 track,
                 is_start,
                 artist_name_visibility: anv,
@@ -301,7 +302,7 @@ impl Render for TrackItem {
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .flex_grow()
+                                            .flex_grow(1.0)
                                             .overflow_x_hidden()
                                             .min_w(px(0.0))
                                             .my_auto()

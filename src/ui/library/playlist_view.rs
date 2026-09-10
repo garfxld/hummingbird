@@ -933,7 +933,6 @@ impl Render for PlaylistView {
                                                         let track_item = TrackItem::new(
                                                             cx,
                                                             Arc::try_unwrap(track).unwrap(),
-                                                            idx,
                                                             false,
                                                             ArtistNameVisibility::Always,
                                                             TrackItemLeftField::Art,

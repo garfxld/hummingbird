@@ -17,7 +17,7 @@ use crate::{
             managed_image::{ManagedImageKey, managed_image},
             menu::{menu, menu_item, menu_separator},
             nav_button::nav_button,
-            scrollbar::{RightPad, ScrollableHandle, floating_scrollbar},
+            scrollbar::{ScrollableHandle, floating_scrollbar},
             tooltip::build_tooltip,
         },
         library::{ViewSwitchMessage, add_to_playlist::AddToPlaylist},
@@ -231,7 +231,7 @@ impl Render for QueueItem {
         let is_available = self
             .item
             .as_ref()
-            .is_some_and(|queue_item| is_track_path_available(queue_item.get_path()));
+            .is_some_and(|queue_item| is_track_path_available(cx, &queue_item.get_path()));
         let is_selected = self.selection.read(cx).contains(self.idx);
 
         if let Some(item) = ui_data.as_ref() {
@@ -240,7 +240,7 @@ impl Render for QueueItem {
                 let scroll_handle: ScrollableHandle = self.scroll_handle.clone().into();
 
                 settings.model.read(cx).interface.always_show_scrollbars
-                    && scroll_handle.should_draw_scrollbar()
+                    && scroll_handle.should_draw_vertical_scrollbar()
             };
             let is_current = self.current == self.idx;
             let image_key = album_id.map(ManagedImageKey::Album).or_else(|| {
@@ -444,7 +444,7 @@ impl Render for QueueItem {
                                             div()
                                                 .text_ellipsis()
                                                 .overflow_x_hidden()
-                                                .flex_shrink()
+                                                .flex_shrink(1.0)
                                                 .text_xs()
                                                 .child(item.artist_name.clone().unwrap_or_else(
                                                     || tr!("UNKNOWN_ARTIST").into(),
@@ -581,11 +581,16 @@ impl Render for QueueItem {
                                     tr!("GO_TO_ARTIST", "Go to artist"),
                                     move |_, _, cx| {
                                         if let Some(album_id) = album_id {
-                                            let Ok(artist_id) = cx.artist_id_for_album(album_id)
+                                            let Ok(artist_ids) = cx.artist_ids_for_album(album_id)
                                             else {
                                                 return;
                                             };
 
+                                            let Some((artist_id, _)) = artist_ids.first() else {
+                                                return;
+                                            };
+
+                                            let artist_id = *artist_id;
                                             let switcher =
                                                 cx.global::<Models>().switcher_model.clone();
                                             switcher.update(cx, |_, cx| {
@@ -1088,7 +1093,6 @@ impl Render for Queue {
                     .child(floating_scrollbar(
                         "queue_scrollbar",
                         scroll_handle,
-                        RightPad::Pad,
                     )),
             )
     }

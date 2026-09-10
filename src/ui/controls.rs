@@ -198,7 +198,7 @@ impl InfoSection {
             let can_navigate_to_artist = current_library_track
                 .as_ref()
                 .and_then(|track| track.album_id)
-                .is_some_and(|album_id| cx.artist_id_for_album(album_id).is_ok());
+                .is_some_and(|album_id| cx.artist_ids_for_album(album_id).is_ok());
 
             let is_liked = current_library_track.as_ref().and_then(|track| {
                 cx.playlist_has_track(LIKED_SONGS_PLAYLIST_ID, track.id)
@@ -462,7 +462,7 @@ fn update_current_track_state(
         .current_library_track
         .as_ref()
         .and_then(|track| track.album_id)
-        .is_some_and(|album_id| cx.artist_id_for_album(album_id).is_ok());
+        .is_some_and(|album_id| cx.artist_ids_for_album(album_id).is_ok());
     this.is_liked = this.current_library_track.as_ref().and_then(|track| {
         cx.playlist_has_track(LIKED_SONGS_PLAYLIST_ID, track.id)
             .unwrap_or_default()

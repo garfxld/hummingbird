@@ -670,7 +670,7 @@ impl Render for Library {
                 .rounded_full()
                 .bg(transparent_black())
                 .shadow(vec![BoxShadow {
-                    color: Hsla::from(rgb(0x3E7BD6)).opacity(0.75),
+                    color: rgb_to_hsla(rgb(0x3E7BD6)).opacity(0.75),
                     blur_radius: px(380.0),
                     spread_radius: px(0.0),
                     offset: point(px(0.0), px(0.0)),

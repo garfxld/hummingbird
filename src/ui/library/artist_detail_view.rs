@@ -94,7 +94,6 @@ impl ArtistDetailView {
                     TrackItem::new(
                         cx,
                         track.clone(),
-                        index,
                         false,
                         ArtistNameVisibility::OnlyIfDifferent(artist_name.clone()),
                         TrackItemLeftField::Art,
@@ -121,7 +120,6 @@ impl ArtistDetailView {
                     TrackItem::new(
                         cx,
                         track.clone(),
-                        index,
                         false,
                         ArtistNameVisibility::OnlyIfDifferent(artist_name.clone()),
                         TrackItemLeftField::Art,
@@ -245,7 +243,6 @@ impl ArtistDetailView {
                 TrackItem::new(
                     cx,
                     track.clone(),
-                    index,
                     false,
                     ArtistNameVisibility::OnlyIfDifferent(self.artist_name.clone()),
                     TrackItemLeftField::Art,
@@ -314,7 +311,6 @@ impl ArtistDetailView {
                 TrackItem::new(
                     cx,
                     track.clone(),
-                    index,
                     false,
                     ArtistNameVisibility::OnlyIfDifferent(self.artist_name.clone()),
                     TrackItemLeftField::Art,

@@ -63,7 +63,6 @@ impl TrackListing {
                         TrackItem::new(
                             cx,
                             track.clone(),
-                            index,
                             is_group_start(
                                 index,
                                 tracks_for_closure.get(index.wrapping_sub(1)),
